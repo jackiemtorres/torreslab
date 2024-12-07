@@ -1623,3 +1623,2595 @@ ci.estimate <- function(data = ObsData, H.AL.components = 1){
 
 CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
 CI2
+
+
+##### Mean difference in candidate mediators with >1 PPR using TMLE #####
+### depression outcome
+cham_household_depress_mean <- cham_household_analytic %>% filter(!is.na(depress_mc1))
+cham_household_depress_mean <- cham_household_depress_mean %>% filter(!(is.na(ppr_1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                          is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                          is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppr_1 variable numeric
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(A = ifelse(ppr_1 == "<=1", 0, 1))
+
+cham_household_depress_mean <- cham_household_depress_mean %>% dplyr::select(depress_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                             educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_depress_mean
+ObsData <- ObsData %>% rename(Y = depress_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### anxiety outcome
+cham_household_anx_mean <- cham_household_analytic %>% filter(!is.na(gadscore_mc1))
+cham_household_anx_mean <- cham_household_anx_mean %>% filter(!(is.na(ppr_1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                  is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                  is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppr_1 variable numeric
+cham_household_anx_mean <- cham_household_anx_mean %>% mutate(A = ifelse(ppr_1 == "<=1", 0, 1))
+
+cham_household_anx_mean <- cham_household_anx_mean %>% dplyr::select(gadscore_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_anx_mean
+ObsData <- ObsData %>% rename(Y = gadscore_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### sleep outcome
+cham_household_sleep_mean <- cham_household_analytic %>% filter(!is.na(avg_sleep))
+cham_household_sleep_mean <- cham_household_sleep_mean %>% filter(!(is.na(ppr_1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                      is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                      is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppr_1 variable numeric
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(A = ifelse(ppr_1 == "<=1", 0, 1))
+
+cham_household_sleep_mean <- cham_household_sleep_mean %>% dplyr::select(avg_sleep, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                         educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_sleep_mean
+ObsData <- ObsData %>% rename(Y = avg_sleep)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+##### Mean difference in cognitive scores with >2 PPBR using TMLE #####
+### memory outcome
+cham_household_mem_mean <- cham_household_analytic %>% filter(!is.na(memory_mc1))
+cham_household_mem_mean <- cham_household_mem_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                  is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                  is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppb2_mc1 variable numeric
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_mem_mean <- cham_household_mem_mean %>% dplyr::select(memory_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_mem_mean
+ObsData <- ObsData %>% rename(Y = memory_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### executive function outcome
+cham_household_exec_mean <- cham_household_analytic %>% filter(!is.na(execfun_rc_mc1))
+cham_household_exec_mean <- cham_household_exec_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                    is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                    is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppb2_mc1 variable numeric
+cham_household_exec_mean <- cham_household_exec_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_exec_mean <- cham_household_exec_mean %>% dplyr::select(execfun_rc_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                       educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_exec_mean
+ObsData <- ObsData %>% rename(Y = execfun_rc_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### verbal fluency outcome
+cham_household_verbal_mean <- cham_household_analytic %>% filter(!is.na(verbal_rc_mc1))
+cham_household_verbal_mean <- cham_household_verbal_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                        is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                        is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppb2_mc1 variable numeric
+cham_household_verbal_mean <- cham_household_verbal_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_verbal_mean <- cham_household_verbal_mean %>% dplyr::select(verbal_rc_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                           educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_verbal_mean
+ObsData <- ObsData %>% rename(Y = verbal_rc_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### global function outcome
+cham_household_global_mean <- cham_household_analytic %>% filter(!is.na(global_rc_mc1))
+cham_household_global_mean <- cham_household_global_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                        is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                        is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppb2_mc1 variable numeric
+cham_household_global_mean <- cham_household_global_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_global_mean <- cham_household_global_mean %>% dplyr::select(global_rc_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                           educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_global_mean
+ObsData <- ObsData %>% rename(Y = global_rc_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"),
+                         # "SL.earth",
+                         # "SL.ranger"),
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"),
+                          # "SL.earth",
+                          # "SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+##### Mean difference in cognitive scores with >1 PPR using TMLE #####
+### memory outcome
+cham_household_mem_mean <- cham_household_analytic %>% filter(!is.na(memory_mc1))
+cham_household_mem_mean <- cham_household_mem_mean %>% filter(!(is.na(ppr_1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                  is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                  is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppr_1 variable numeric
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(A = ifelse(ppr_1 == "<=1", 0, 1))
+
+cham_household_mem_mean <- cham_household_mem_mean %>% dplyr::select(memory_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_mem_mean
+ObsData <- ObsData %>% rename(Y = memory_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth",
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth",
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### executive function outcome
+cham_household_exec_mean <- cham_household_analytic %>% filter(!is.na(execfun_rc_mc1))
+cham_household_exec_mean <- cham_household_exec_mean %>% filter(!(is.na(ppr_1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                    is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                    is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppr_1 variable numeric
+cham_household_exec_mean <- cham_household_exec_mean %>% mutate(A = ifelse(ppr_1 == "<=1", 0, 1))
+
+cham_household_exec_mean <- cham_household_exec_mean %>% dplyr::select(execfun_rc_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                       educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_exec_mean
+ObsData <- ObsData %>% rename(Y = execfun_rc_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### verbal fluency outcome
+cham_household_verbal_mean <- cham_household_analytic %>% filter(!is.na(verbal_rc_mc1))
+cham_household_verbal_mean <- cham_household_verbal_mean %>% filter(!(is.na(ppr_1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                        is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                        is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppr_1 variable numeric
+cham_household_verbal_mean <- cham_household_verbal_mean %>% mutate(A = ifelse(ppr_1 == "<=1", 0, 1))
+
+cham_household_verbal_mean <- cham_household_verbal_mean %>% dplyr::select(verbal_rc_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                           educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_verbal_mean
+ObsData <- ObsData %>% rename(Y = verbal_rc_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+### global function outcome
+cham_household_global_mean <- cham_household_analytic %>% filter(!is.na(global_rc_mc1))
+cham_household_global_mean <- cham_household_global_mean %>% filter(!(is.na(ppr_1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                        is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                        is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppr_1 variable numeric
+cham_household_global_mean <- cham_household_global_mean %>% mutate(A = ifelse(ppr_1 == "<=1", 0, 1))
+
+cham_household_global_mean <- cham_household_global_mean %>% dplyr::select(global_rc_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                           educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_global_mean
+ObsData <- ObsData %>% rename(Y = global_rc_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                         #"SL.earth", 
+                         #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                             type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                         "SL.glm",
+                                         "SL.glmnet",
+                                         "SL.earth",
+                                         "SL.xgboost"), 
+                          #"SL.earth", 
+                          #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+        2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                  offset(qlogis(init.Pred)),
+                family = "binomial",
+                data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+  ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                     ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+
+
+##### Create numeric exposure variables #####
+# make people per bedroom numeric 
+cham_household <- cham_household %>% mutate(ppb2_num = ifelse(ppb2_mc1 == "<=2", 0, 
+                                                              ifelse(ppb2_mc1 == ">2", 1, NA)))
+cham_household %>% group_by(ppb2_num) %>% count()
+
+# make people per room numeric 
+cham_household <- cham_household %>% mutate(ppr1_num = ifelse(ppr_1 == "<=1", 0, 
+                                                              ifelse(ppr_1 == ">1", 1, NA)))
+
+cham_household %>% group_by(ppr1_num) %>% count()
+
+
+##### Make all variables numeric and calulate analytic sample #####
+cham_household <- cham_household %>% mutate(sleep_sq = avg_sleep^2)
+# select relevant variables
+cham_household_med <- cham_household %>% dplyr::select(age_qx_mc1, ageusa_18, lang_exam_mc1, educcat_mom, 
+                                                       married, pov_binary, work_mc1, ppb2_num, 
+                                                       ppr1_num, lvhome_n18_mc1,
+                                                       depress_mc1, depresscat_mc1,
+                                                       gadscore_mc1, gad4cat_mc1,
+                                                       summary_health_cat_yes, menoind_mc1,
+                                                       alcslv_mc1, alc30_mc1, alc,
+                                                       avg_sleep, sleep_sq, memory_mc1, execfun_rc_mc1, verbal_rc_mc1, 
+                                                       global_rc_mc1, density1_mc1, ppb2_mc1,
+                                                       ppb_mc1,
+                                                       ppr_1_update, execfun_tbex_mc1, global_tbex_mc1)
+
+cham_household_med <- cham_household_med %>% mutate(ageusa18_cat_num = ifelse(ageusa_18 == "0", 0, 
+                                                                              ifelse(ageusa_18 == "<18", 1, 2)))
+
+cham_household_med <- cham_household_med %>% mutate(lang_exam_mc1_num = ifelse(lang_exam_mc1 == "English", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(educcat_num = ifelse(educcat_mom == "<=6th grade", 0, 
+                                                                         ifelse(educcat_mom == "7-11th grade", 1, 2)))
+
+cham_household_med <- cham_household_med %>% mutate(married_num = ifelse(married == "not married", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(pov_num = ifelse(pov_binary == "At or below poverty", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(work_num = ifelse(work_mc1 == "Did not work since last visit", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(summary_health_num = 
+                                                      ifelse(summary_health_cat_yes == "no health issues", 0, 
+                                                             ifelse(summary_health_cat_yes == "1 health issue", 1, 2)))
+
+cham_household_med <- cham_household_med %>% mutate(ppr_1_update = ifelse(ppr_1_update == "<=1", 0, 1))
+
+# create numeric variable for depression
+cham_household_med <- cham_household_med %>% mutate(depresscat_mc1 = ifelse(depresscat_mc1 == 0, 0, 1))
+
+# create binary variable for anxiety (minimal/mild anxiety vs. moderate/severe anxiety)
+cham_household_med <- cham_household_med %>% mutate(anx_bin = ifelse(gad4cat_mc1 == 0 | gad4cat_mc1 == 1, 0, 1))
+
+## calculate number of individuals missing covariates
+cham_household_med <- cham_household_med %>% filter(!is.na(ppb2_num) & !is.na(age_qx_mc1) & !is.na(ageusa18_cat_num) & 
+                                                      !is.na(lang_exam_mc1_num) & !is.na(educcat_num) &
+                                                      !is.na(married_num) & !is.na(pov_num) & !is.na(work_num) &
+                                                      !is.na(lvhome_n18_mc1) &
+                                                      !is.na(avg_sleep) & !is.na(depress_mc1) & !is.na(gadscore_mc1) & 
+                                                      !is.na(summary_health_num) & !is.na(menoind_mc1) & !is.na(alc)) 
+cham_household_med
+
+# calculate number of individuals missing neurocog outcomes                                                       
+cham_household_med %>% filter(!is.na(memory_mc1)) # same number missing as verbal_rc_mcl   
+cham_household_med %>% filter(!is.na(global_rc_mc1)) # same number misssing as execfun_rc_mc1
+
+
+##### Rename variables to use in Crumble package (>2 PPBR) #####
+### memory outcome
+cham_household_med_mem <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                               educcat_num, married_num, pov_num, work_num,
+                                                               lvhome_n18_mc1,
+                                                               ppb2_num, depress_mc1, gadscore_mc1,
+                                                               summary_health_num, menoind_mc1, 
+                                                               alc, avg_sleep, memory_mc1) %>% 
+  rename(A = ppb2_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num, 
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep,
+         Y = memory_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_mem <- as.data.frame(cham_household_med_mem)
+
+
+### executive function outcome
+cham_household_med_exec <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                                educcat_num, married_num, pov_num, work_num,
+                                                                lvhome_n18_mc1,
+                                                                ppb2_num, depress_mc1, gadscore_mc1,
+                                                                summary_health_num, menoind_mc1, 
+                                                                alc, avg_sleep, execfun_rc_mc1) %>% 
+  rename(A = ppb2_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num, 
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep, 
+         Y = execfun_rc_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_exec <- as.data.frame(cham_household_med_exec)
+
+
+### verbal fluency outcome
+cham_household_med_verbal <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                                  educcat_num, married_num, pov_num, work_num,
+                                                                  lvhome_n18_mc1,
+                                                                  ppb2_num, depress_mc1, gadscore_mc1,
+                                                                  summary_health_num, menoind_mc1, 
+                                                                  alc, avg_sleep, verbal_rc_mc1) %>% 
+  rename(A = ppb2_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num, 
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep, 
+         Y = verbal_rc_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_verbal <- as.data.frame(cham_household_med_verbal)
+
+
+### global function outcome
+cham_household_med_global <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                                  educcat_num, married_num, pov_num, work_num,
+                                                                  lvhome_n18_mc1, 
+                                                                  ppb2_num, depress_mc1, gadscore_mc1,
+                                                                  summary_health_num, menoind_mc1, 
+                                                                  alc, avg_sleep, global_rc_mc1) %>% 
+  rename(A = ppb2_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num,
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep, 
+         Y = global_rc_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_global <- as.data.frame(cham_household_med_global)
+
+
+##### Mediation analysis (natural effects) with average sleep and > 2 people per bedroom (Crumble package) #####
+
+## memory outcome
+data(cham_household_med_mem, package = "mma")
+crumble_memory <- crumble(
+  data = cham_household_med_mem,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_memory
+
+
+## executive function outcome
+data(cham_household_med_exec, package = "mma")
+crumble_exec <- crumble(
+  data = cham_household_med_exec,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_exec
+
+## verbal fluency outcome
+data(cham_household_med_verbal, package = "mma")
+crumble_verbal <- crumble(
+  data = cham_household_med_verbal,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_verbal
+
+
+## global function outcome
+data(cham_household_med_global, package = "mma")
+crumble_global <- crumble(
+  data = cham_household_med_global,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_global
+
+
+##### Rename variables to use in Crumble package (>1 PPR) #####
+### memory outcome
+cham_household_med_mem_1ppr <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                                    educcat_num, married_num, pov_num, work_num,
+                                                                    lvhome_n18_mc1,
+                                                                    ppr1_num, depress_mc1, gadscore_mc1,
+                                                                    summary_health_num, menoind_mc1, 
+                                                                    alc, avg_sleep, memory_mc1) %>% 
+  rename(A = ppr1_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num, 
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep, 
+         Y = memory_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_mem_1ppr <- as.data.frame(cham_household_med_mem_1ppr)
+
+
+### executive function outcome
+cham_household_med_exec_1ppr <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                                     educcat_num, married_num, pov_num, work_num,
+                                                                     lvhome_n18_mc1,
+                                                                     ppr1_num, depress_mc1, gadscore_mc1,
+                                                                     summary_health_num, menoind_mc1, 
+                                                                     alc, avg_sleep, execfun_rc_mc1) %>% 
+  rename(A = ppr1_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num, 
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep, 
+         Y = execfun_rc_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_exec_1ppr <- as.data.frame(cham_household_med_exec_1ppr)
+
+
+### verbal fluency outcome
+cham_household_med_verbal_1ppr <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                                       educcat_num, married_num, pov_num, work_num,
+                                                                       lvhome_n18_mc1,
+                                                                       ppr1_num, depress_mc1, gadscore_mc1,
+                                                                       summary_health_num, menoind_mc1, 
+                                                                       alc, avg_sleep, verbal_rc_mc1) %>% 
+  rename(A = ppr1_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num,
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep, 
+         Y = verbal_rc_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_verbal_1ppr <- as.data.frame(cham_household_med_verbal_1ppr)
+
+
+### global function outcome
+cham_household_med_global_1ppr <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                                       educcat_num, married_num, pov_num, work_num,
+                                                                       lvhome_n18_mc1,
+                                                                       ppr1_num, depress_mc1, gadscore_mc1,
+                                                                       summary_health_num, menoind_mc1, 
+                                                                       alc, avg_sleep, global_rc_mc1) %>% 
+  rename(A = ppr1_num, 
+         W1 = age_qx_mc1, 
+         W2 = ageusa18_cat_num, 
+         W3 = lang_exam_mc1_num, 
+         W4 = educcat_num, 
+         W5 = married_num, 
+         W6 = pov_num, 
+         W7 = work_num, 
+         W8 = lvhome_n18_mc1,
+         M = avg_sleep, 
+         Y = global_rc_mc1, 
+         Z1 = depress_mc1, 
+         Z2 = gadscore_mc1, 
+         Z3 = summary_health_num, 
+         Z4 = menoind_mc1,
+         Z5 = alc) %>% drop_na()
+
+cham_household_med_global_1ppr <- as.data.frame(cham_household_med_global_1ppr)
+
+
+##### Mediation analysis (natural effects) with average sleep and > 1 person per room (Crumble package) #####
+## memory outcome
+data(cham_household_med_mem_1ppr, package = "mma")
+crumble_memory_ppr1 <- crumble(
+  data = cham_household_med_mem_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_memory_ppr1
+
+## executive function outcome
+data(cham_household_med_exec_1ppr, package = "mma")
+crumble_exec_ppr1 <- crumble(
+  data = cham_household_med_exec_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_exec_ppr1
+
+
+## verbal fluency outcome
+data(cham_household_med_verbal_1ppr, package = "mma")
+crumble_verbal_ppr1 <- crumble(
+  data = cham_household_med_verbal_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_verbal_ppr1
+
+## global function outcome
+data(cham_household_med_global_1ppr, package = "mma")
+crumble_global_ppr1 <- crumble(
+  data = cham_household_med_global_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = NULL, # for natural effects
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "N",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_global_ppr1
+
+
+
+
+
+##### Sensitivity Analyses #####
+
+
+##### Mediation analysis with recanting twins (>2 PPBR) #####
+## memory outcome
+data(cham_household_med_mem, package = "mma")
+crumble(
+  data = cham_household_med_mem,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+
+## executive function outcome
+data(cham_household_med_exec, package = "mma")
+crumble(
+  data = cham_household_med_exec,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+
+## verbal fluency outcome
+data(cham_household_med_verbal, package = "mma")
+crumble(
+  data = cham_household_med_verbal,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+
+## global function outcome
+data(cham_household_med_global, package = "mma")
+crumble(
+  data = cham_household_med_global,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+
+
+
+
+
+
+
