@@ -4134,6 +4134,7 @@ crumble_global_ppr1 <- crumble(
 crumble_global_ppr1
 
 
+####### START FROM LINE 6368 (mediation with depression and >2PPBR)
 
 
 
@@ -4210,7 +4211,74 @@ crumble(
 )
 
 
+##### Mediation analysis with recanting twins (>1 PPR) #####
+## memory outcome
+data(cham_household_med_mem_1ppr, package = "mma")
+crumble(
+  data = cham_household_med_mem_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
 
+## executive function outcome
+data(cham_household_med_exec_1ppr, package = "mma")
+crumble(
+  data = cham_household_med_exec_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+
+## verbal fluency outcome
+data(cham_household_med_verbal_1ppr, package = "mma")
+crumble(
+  data = cham_household_med_verbal_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+
+## global function outcome
+data(cham_household_med_global_1ppr, package = "mma")
+crumble(
+  data = cham_household_med_global_1ppr,
+  trt = "A", 
+  outcome = "Y",
+  covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"),
+  mediators = c("M"),
+  moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+  d0 = \(data, trt) rep(0, nrow(data)), 
+  d1 = \(data, trt) rep(1, nrow(data)), 
+  effect = "RT",
+  learners = c("mean", "glm", "glmnet", "earth", "xgboost"), 
+  nn_module = sequential_module(),
+  control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
 
 
 
