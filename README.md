@@ -1,3 +1,5 @@
+# Torres Lab
+
 A repository containing the code used for all research projects in the Torres lab at UCSF. The following directories represent the overarhing projects in the Torres lab:
 
 - MatCog
