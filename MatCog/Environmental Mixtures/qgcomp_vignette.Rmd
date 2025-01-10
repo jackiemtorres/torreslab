@@ -1,0 +1,189 @@
+---
+title: "qgcomp vignette"
+author: "Kelsey MacCuish"
+output: pdf_document
+---
+
+Basic model of g-computation: 
+ $$\mathbb{E}(Y^{\mathbf{X}_q} | \mathbf{Z,\psi,\eta}) = g(\psi_0 + \psi_1 S_q + \mathbf{\eta Z})$$
+ - $g(\cdot)$: link function in GLM
+ - $\psi_0$: model intercept
+ - $\eta$: model coefficients for covariates 
+ - $S_q$: index of joint value of exposures (all exposures being set to the same value)
+ - $\mathbf{X}_q$: categorical bin of exposure
+ - $\psi_1$: expected change in the outcome given a one quantile increase in all exposures simultaneously (overall mixture effect)
+ 
+ 
+ $$[ \mathbb{E}(Y | \mathbf{X,\beta}) = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + \beta_3 X_3 ]$$
+ - $\psi_1$ will equal the sum of the $\beta$ coefficients
+ 
+ 
+```{r, load libraries}
+library(qgcomp)
+library(ggplot2)
+library(dplyr)
+```
+ 
+ 
+```{r, load data}
+data("metals", package = "qgcomp")
+head(metals)
+```
+ 
+```{r, create linear model}
+# save names of mixture variables in Xnm and covariated in covars
+Xnm <- c('arsenic', 'barium', 'cadmium', 'calcium', 'chromium', 'copper',
+         'iron', 'lead', 'magnesium', 'manganese', 'mercury', 'selenium',
+         'silver', 'sodium', 'zinc')
+
+covars <- c('nitrate', 'nitrite', 'sulfate', 'ph', 'total_alkalinity', 
+            'total_hardness')
+
+# run linear model
+qc.fit <- qgcomp.glm.noboot(y~.,dat=metals[,c(Xnm, 'y')], family=gaussian())
+
+# scaled coefficients/weights and statistical inference about mixture effect
+# interpreted as the effect on the outcome of increasing every exposure by one quantile, possibly conditional on covariates (relative impact on outcome since all exposures are increasing by one quantile)
+
+qc.fit
+```
+ 
+```{r, underlying model of qgcomp fit - linear model}
+# quantized data
+metals; quantile(metals$arsenic); qc.fit$qx
+
+# how are the quantiles defined? 
+qc.fit$qx %>% dplyr::select(arsenic_q) %>% group_by(arsenic_q) %>% count()
+# 0-25%: 0 
+# 25%-50%: 1
+# 50%-75%: 2
+# 75%-100%: 3
+
+# underlying model of qgcomp fit
+qc.fit$qx$y <- qc.fit$fit$data$y # bring outcome back into quantized data
+
+# adjusted coefficients from underlying model
+# absolute change in outcome by increasing each exposure by 1
+newfit <- lm(y ~ arsenic_q + barium_q + cadmium_q + calcium_q + 
+               chromium_q + copper_q + iron_q + lead_q + magnesium_q + 
+               manganese_q + mercury_q + selenium_q + silver_q + sodium_q + 
+               zinc_q, data = qc.fit$qx)
+
+sum(newfit$coefficients[-1]) # sums to psi_1 
+
+# you can also calculate each scaled effect size by calculating a sum of the positive coefficients and a sum of the negative coefficients and calculating the corresponding proportion each exposure contributes to each sum
+# e.g., calcium = 0.28/0.39 = 0.722 (0.722 is the scaled effect size calculated in qc.fit)
+
+coef(qc.fit)
+```
+ 
+ 
+```{r, conditional odds ratio}
+# conditional odds ratio
+qc.fit2 <- qgcomp.glm.noboot(disease_state~., expnms = Xnm, 
+                             data = metals[,c(Xnm, 'disease_state')], 
+                             family = binomial(), q = 4)
+qc.fit2
+
+# underlying model of qgcomp fit
+qc.fit2$qx$disease_state <- qc.fit2$fit$data$disease_state # bring outcome back into quantized data
+
+# adjusted coefficients from underlying model
+# absolute change in outcome by increasing each exposure by 1
+# can also use qc.fit2$fit
+newfit2 <- glm(disease_state ~ arsenic_q + barium_q + cadmium_q + calcium_q + 
+               chromium_q + copper_q + iron_q + lead_q + magnesium_q + 
+               manganese_q + mercury_q + selenium_q + silver_q + sodium_q + 
+               zinc_q, data = qc.fit2$qx, family = binomial())
+
+tidy(newfit2, conf.int = T)
+
+sum(newfit2$coefficients[-1]) # sums to psi_1 
+
+coef(qc.fit2)
+```
+ 
+ 
+```{r, marginal odds ratio}
+# marginal odds ratio
+qcboot.fit2 <- qgcomp.glm.boot(disease_state ~., expnms = Xnm, 
+                               data = metals[,c(Xnm, 'disease_state')], 
+                               family = binomial(),
+                               q = 4, B = 10, # B should be 200-500+ in practice
+                               seed = 125, rr = FALSE)
+qcboot.fit2 # total scaled effect
+
+# individual exposure beta coefficients and CIs
+# (same as those from conditional odds ratio)
+tidy(qcboot.fit2$fit, conf.int = T) 
+
+
+# underlying model of qgcomp fit with bootstrapping
+qcboot.fit2$qx$disease_state <- qcboot.fit2$fit$data$disease_state # bring outcome back into quantized data
+
+# adjusted coefficients from underlying model
+# absolute change in outcome by increasing each exposure by 1
+newbootfit2 <- glm(disease_state ~ arsenic_q + barium_q + cadmium_q + calcium_q + 
+               chromium_q + copper_q + iron_q + lead_q + magnesium_q + 
+               manganese_q + mercury_q + selenium_q + silver_q + sodium_q + 
+               zinc_q, data = qcboot.fit2$qx, family = binomial())
+
+boot_func <- function(data, indices) {
+  # Resample data
+  boot_data <- data[indices, ]
+  
+  # Fit the glm model on the resampled data
+  fit <- glm(disease_state ~ arsenic_q + barium_q + cadmium_q + calcium_q + 
+               chromium_q + copper_q + iron_q + lead_q + magnesium_q + 
+               manganese_q + mercury_q + selenium_q + silver_q + sodium_q + 
+               zinc_q, data = boot_data, family = binomial())
+  
+  # Return the coefficients
+  return(coef(fit))
+}
+
+set.seed(123)  # For reproducibility
+boot_results <- boot(
+  data = qcboot.fit2$qx,  # Your dataset
+  statistic = boot_func,  # The bootstrap function
+  R = 1000                # Number of bootstrap replicates
+)
+
+coef_names <- names(coef(newbootfit2))
+
+# Calculate 95% bootstrap confidence intervals for each coefficient
+ci <- t(apply(boot_results$t, 2, function(x) {
+  quantile(x, probs = c(0.025, 0.975))
+}))
+
+# Add coefficient names for clarity
+rownames(ci) <- coef_names
+colnames(ci) <- c("Lower 95% CI", "Upper 95% CI")
+
+# Mean of bootstrap coefficients
+boot_means <- colMeans(boot_results$t)
+
+# Combine results
+bootstrap_summary <- data.frame(
+  Coefficient = coef_names,
+  Estimate = boot_means,
+  `Lower 95% CI` = ci[, 1],
+  `Upper 95% CI` = ci[, 2]
+)
+
+print(bootstrap_summary)
+sum(bootstrap_summary$Estimate[-1])
+
+sum(newbootfit2$coefficients[-1]) # sums to psi_1 
+
+coef(qcboot.fit2)
+
+```
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+
