@@ -1,0 +1,405 @@
+---
+title: "Social Mixtures"
+author: "Kelsey MacCuish"
+output: pdf_document
+---
+
+```{r, load libraries}
+library(haven)
+library(dplyr)
+library(tableone)
+library(broom)
+library(ggplot2)
+library(tidyr)
+```
+
+
+## Read in data
+```{r, read data}
+cham_all <- read_dta("../Code/torres_stressor_01i_nohsn.dta") # read in CHAMACOS data
+
+head(cham_all) # first 6 rows of dataset
+str(cham_all) # variables and variable types
+dim(cham_all) # number of observations and variables
+names(cham_all) # names of variables
+```
+
+
+## Define exposures, outcomes, covariates
+```{r, define exposures, outcomes, covariates}
+## Exposures: 
+# Poverty
+# Food insecurity
+# Household crowding (PPBR)
+# Deportation worry
+# Chronic stressors (personal health problems, health problem in someone else, job difficulties, financial, relationships, taking care of friend/relative w/ health condition, parenting, natural disasters, COVID-19, something else)
+
+
+## Outcomes: 
+# Primary:
+# Cognitive performance:
+# Memory
+# Executive function
+# Verbal fluency
+# Global composition
+
+# Secondary: 
+# Cardiometabolic: 
+# Diabetes (self-report)
+# Fasting glucose and HbA1c
+# Hypertension (self-report and blood pressure)
+# BMI
+# Waist circumference
+
+
+## Covariates: 
+# Age (baseline)
+# Education (baseline)
+# Nativity/age at migration (baseline)
+# Marital status (18-year, MatCog)
+# Employment status (MatCog)
+# Language of interview (MatCog)
+# Depression and anxiety (16-year, 18-year, MatCog)
+# Self-reported chronic health conditions (MatCog)
+```
+
+
+## Data cleaning
+```{r, clean variables for analysis}
+## Exposures: 
+
+# Poverty status: povcat_mc1 and pov_binary
+cham <- cham_all %>% mutate(povcat_mc1 = ifelse(povcat_mc1 == 1, "At or below poverty",
+                                     ifelse(povcat_mc1 == 2, "200% FPL",
+                                     ifelse(povcat_mc1 == 3, ">=200% FPL", "Missing"))))
+
+cham <- cham %>% mutate(pov_binary = ifelse(is.na(povcat_mc1) | 
+                                            povcat_mc1 == "At or below poverty", 
+                                            "At or below poverty", "Above poverty"))
+
+# Food insecurity: ficat_mc1
+cham <- cham %>% mutate(ficat_mc1 = ifelse(ficat_mc1 == 1, "High security", 
+                                    ifelse(ficat_mc1 == 2, "Low security", "Very low security")))
+
+# Household crowding: ppb2_mc1 and ppr_1
+# more than 2 people per bedroom: ppb2_mc1 
+cham <- cham %>% mutate(ppb2_mc1 = ifelse(ppb2_mc1 == 0, "<=2", ">2"))
+
+# more than 1 person per room: ppr_1 and ppr_1_update
+cham <- cham %>% mutate(ppr_1 = ifelse(dens1_cat_mc1 == 1 | dens1_cat_mc1 == 2, "<=1", 
+                                ifelse(dens1_cat_mc1 == 3 | dens1_cat_mc1 == 4, ">1", NA)))
+
+cham <- cham %>% mutate(ppr_1_update = ifelse(dens2_cat_mc1 == 1 | dens2_cat_mc1 == 2, "<=1", 
+                                ifelse(dens2_cat_mc1 == 3 | dens2_cat_mc1 == 4, ">1", NA)))
+
+# Deportation worry: wry_dep_mc1
+cham <- cham %>% mutate(wry_dep_mc1 = ifelse(wry_dep_mc1 == 1, "A lot", 
+                                      ifelse(wry_dep_mc1 == 2, "Some", 
+                                      ifelse(wry_dep_mc1 == 3, "Not much", "Not at all"))))
+
+# Chronic stress: personal health: stress_personal_health_mc1
+cham <- cham %>% mutate(stress_personal_health_mc1 = ifelse(stress1_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: health problem in someone close to you: stress_other_health_mc1
+cham <- cham %>% mutate(stress_other_health_mc1 = ifelse(stress2_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: job: stress_job_mc1
+cham <- cham %>% mutate(stress_job_mc1 = ifelse(stress3_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: financial: stress_fin_mc1
+cham <- cham %>% mutate(stress_fin_mc1 = ifelse(stress4_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: relationship: stress_relat_mc1
+cham <- cham %>% mutate(stress_relat_mc1 = ifelse(stress5_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: taking care of someone with health condition: stress_take_care_mc1
+cham <- cham %>% mutate(stress_take_care_mc1 = ifelse(stress6_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: parenting: stress_parent_mc1
+cham <- cham %>% mutate(stress_parent_mc1 = ifelse(stress7_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: natural disaster: stress_disaster_mc1
+cham <- cham %>% mutate(stress_disaster_mc1 = ifelse(stress8_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: COVID-19: stress_covid_mc1
+cham <- cham %>% mutate(stress_covid_mc1 = ifelse(stress9_mc1 == 0, "No", "Yes"))
+
+# Chronic stress: something else: stress_else_mc1
+cham <- cham %>% mutate(stress_else_mc1 = ifelse(stress10_mc1 == 0, "No", "Yes"))
+
+
+## Covariates: 
+
+# Age at baseline: momdl_age
+cham %>% dplyr::select(momdl_age)
+                        
+# Education at baseline: educcat_mom
+cham <- cham %>% mutate(educcat_mom = ifelse(educcat_mom == 1, "<=6th grade", 
+                                      ifelse(educcat_mom == 2, "7-11th grade", 
+                                      ifelse(educcat_mom == 3, ">= HS graduate", NA))))
+
+# Nativity/age at migration at baseline: ageusa_cat and ageusa_bl and ageusa_18
+
+# calculate age participant came back to the US at matcog visit 1
+# yrsusa_matcog = yrsusa_dl + (date_matcog - dlvrydt)/365.25 
+# yrsusa_matcog is years in the US at maternal cognition study visit 1
+cham <- cham %>% mutate(age_came_back_to_us = age_qx_mc1 - yrsusa_matcog)
+
+# compare ageusa_bl with calculated age got back to the US
+cham %>% dplyr::select(age_qx_mc1, yrsusa_matcog, ageusa_bl, age_came_back_to_us) %>% filter(!is.na(age_qx_mc1))
+
+# if ageusa_bl is -9, participant was born in the US
+cham <- cham %>% mutate(ageusa_bl = ifelse(ageusa_bl == -9, 0, ageusa_bl))
+
+# if ageusa_bl is < 0, set to 0
+cham <- cham %>% mutate(ageusa_bl = ifelse(ageusa_bl < 0, 0, ageusa_bl))
+
+# if ageusa_bl is missing, and age_qx_mc1 = yrsusa_matcog, replace ageusa_bl with age_came_back_to_us
+# if age at survey = number of years lived in the US, person has lived in the US their whole life
+# i.e., they did not leave and come back to the US
+cham <- cham %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & 
+                                           age_qx_mc1 - yrsusa_matcog < 1, age_came_back_to_us, 
+                                                     ageusa_bl))
+
+# check instances where there are discrepancies between ageusa_bl and calculated age_came_back_to_us
+cham %>% filter(abs(ageusa_bl - age_came_back_to_us) > 2) %>% 
+  dplyr::select(newid, age_qx_mc1, yrsusa_matcog, ageusa_bl, age_came_back_to_us, country_mom)
+
+# check distribution of age came to the US variable
+ggplot(data = cham, aes(x = ageusa_bl)) + 
+  geom_histogram()
+
+cham %>% filter(is.na(ageusa_bl)) %>% dplyr::select(newid, ageusa_bl, age_came_back_to_us,
+                                                    country_mom, age_qx_mc1, yrsusa_matcog)
+
+# set ageusa_bl to 0 for individuals with country_mom = 1 
+cham <- cham %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & country_mom == 1, 0, ageusa_bl))
+
+
+# categorize age came to the US variable 
+cham <- cham %>% mutate(ageusa_cat = 
+                        ifelse(country_mom == 1, "0",
+                        ifelse(ageusa_bl > 0 & ageusa_bl < 18, "<1-17", 
+                        ifelse(ageusa_bl >= 18 & ageusa_bl < 25, "18-24",
+                        ifelse(ageusa_bl >= 25, "25+", NA)))))
+
+# check age came to the us distribution among matcog participatns 
+cham %>% filter(!is.na(age_qx_mc1)) %>% group_by(ageusa_cat) %>% count()
+
+
+# check those missing age that came to the US variable
+cham %>% filter(is.na(ageusa_cat)) %>% dplyr::select(newid, country_mom, ageusa_bl, ageusa_cat,
+                                                     age_came_back_to_us, newid, yrsusa_matcog, 
+                                                     age_qx_mc1)
+
+# 7 individuals with ageusa_bl = 0 and country_mom = 2
+# recategorize these into "<1-17" group
+cham <- cham %>% mutate(ageusa_cat = ifelse(country_mom == 2 & is.na(ageusa_cat), "<1-17", ageusa_cat))
+
+# replace the two missing their ageusa_cat values with their calculated age_came_back_to_us values
+cham <- cham %>% mutate(ageusa_cat = ifelse(is.na(ageusa_cat), age_came_back_to_us, ageusa_cat))
+
+cham <- cham %>% mutate(ageusa_cat = ifelse(ageusa_cat == 17.3915138244629, "<1-17", 
+                                     ifelse(ageusa_cat == 23.0636558532715, "18-24", 
+                                            ageusa_cat)))
+
+cham %>% group_by(ageusa_cat) %>% count()
+
+# create adulthood arrival to the US variable: born in US, <18 and 18+
+cham <- cham %>% mutate(ageusa_18 = ifelse(ageusa_cat == "0", "0",
+                                    ifelse(ageusa_cat == "<1-17", "<18", "18+")))
+
+# Marriage: marstat_m18y and married (matcog)
+cham <- cham %>% mutate(marstat_m18y = ifelse(marstat_m18y == 1 | 
+                                              marstat_m18y == 2, "married", "not married"))
+
+cham <- cham %>% mutate(married = ifelse(married_mc1 == 1 | 
+                                         married_mc1 == 2, "married", "not married"))
+
+# Employment status: work_mc1 and workc_mc1
+cham <- cham %>% mutate(work_mc1 = 
+                        ifelse(work_mc1 == 1, "Worked since last visit",
+                        ifelse(work_mc1 == 0, "Did not work since last visit", NA)))
+
+cham <- cham %>% mutate(workc_mc1 = ifelse(workc_mc1 == 1, "Working now",
+                                    ifelse(workc_mc1 == 0, "Not working now",
+                                           NA)))
+
+# Language of interview: lang_exam_mc1
+cham <- cham %>% mutate(lang_exam_mc1 = ifelse(lang_exam_mc1 == 1, "English", "Spanish"))
+
+# Depression: depresscat_mc1, depresscat_m18y, depresscat_m16y, depress_mc1, depress_m18y, depress_m16y and dep_mc1
+cham <- cham %>% mutate(depresscat_mc1 = ifelse(depresscat_mc1 == 0, "Not depressed", "Depressed"))
+
+cham <- cham %>% mutate(depresscat_m18y = ifelse(depresscat_m18y == 0, "Not depressed",
+                                                 "Depressed"))
+
+cham <- cham %>% mutate(depresscat_m16y = ifelse(depresscat_m16y == 0, "Not depressed",
+                                                 "Depressed"))
+
+cham <- cham %>% mutate(dep_mc1 = ifelse(dep_mc1 == 0, "No",
+                                  ifelse(dep_mc1 == 1, "Yes", 
+                                  ifelse(dep_mc1 == 9, "Don't know", NA))))
+
+# Anxiety: gadscore_mc1, gad7_score_m18y, gad7_score_m16y, gad4cat_mc1, gad7_4cat_m18y, gad7_4cat_m16y, anx_mc1
+cham <- cham %>% mutate(gad4cat_mc1 = ifelse(gad4cat_mc1 == 0, "Minimal", 
+                                      ifelse(gad4cat_mc1 == 1, "Mild", 
+                                      ifelse(gad4cat_mc1 == 2, "Moderate", "Severe"))))
+
+cham <- cham %>% mutate(gad7_4cat_m18y = )
+
+cham %>% dplyr::select(gadscore_mc1, gad7_score_m18y, gad7_score_m16y, 
+                       gad4cat_mc1, gad7_4cat_m18y, gad7_4cat_m16y, anx_mc1)
+
+# Self-reported chronic health conditions: diab_mc1, hbp_mc1, heart_mc1, cancer_mc1, asth_mc1, thyr_mc1
+
+# re-code don't knows to 999
+cham <- cham %>% 
+  mutate(diab_mc1 = ifelse(diab_mc1 == 9, 999, diab_mc1),
+         hbp_mc1 = ifelse(hbp_mc1 == 9, 999, hbp_mc1),
+         # chol_mc1 = ifelse(chol_mc1 == 9, 999, chol_mc1),
+         heart_mc1 = ifelse(heart_mc1 == 9, 999, heart_mc1), 
+         cancer_mc1 = ifelse(cancer_mc1 == 9, 999, cancer_mc1), 
+         asth_mc1 = ifelse(asth_mc1 == 9, 999, asth_mc1), 
+         thyr_mc1 = ifelse(thyr_mc1 == 9, 999, thyr_mc1)) 
+
+# check distribution of each self-rated doctor diagnosed health condition
+cham %>% group_by(diab_mc1) %>% count() # only 1 person missing diabetes score
+cham %>% group_by(hbp_mc1) %>% count() # 3 missing HBP score
+cham %>% group_by(chol_mc1) %>% count() # 6 missing cholesterol
+cham %>% group_by(heart_mc1) %>% count() # 4 missing heart issues
+cham %>% group_by(cancer_mc1) %>% count() # 4 missing cancer
+cham %>% group_by(asth_mc1) %>% count() # 2 missing asthma
+cham %>% group_by(thyr_mc1) %>% count() # 0 missing thyroid
+cham %>% group_by(dep_mc1) %>% count() # 7 missing depression 
+cham %>% group_by(anx_mc1) %>% count() # 9 missing anxiety
+
+
+# For those who don't know high blood pressure: 
+# Check bpcat_mc1 variable for blood pressure information
+# Replace the don't knows with 1 if have high blood pressure, 0 if no HBP
+# only don't have hypertension if 0 for hbp_mc1 and bpcat_mc1 is 1 or 2 
+cham %>% filter(hbp_mc1 == 999)
+cham %>% filter(hbp_mc1 == 0 & bpcat_mc1 %in% c(3, 4))
+
+recat_bp <- cham %>% filter(hbp_mc1 == 0 & bpcat_mc1 %in% c(3, 4))
+
+cham <- cham %>% mutate(hbp_mc1 = ifelse(newid %in% c(recat_bp$newid), 1, 
+                                                         hbp_mc1))
+
+cham <- cham %>% mutate(hbp_mc1 = ifelse(newid == 99 & bpcat_mc1 == 3, 1,
+                                  ifelse(newid == 102 & bpcat_mc1 == 1, 0,
+                                  ifelse(newid == 617 & bpcat_mc1 == 1, 0,
+                                         hbp_mc1))))
+
+# For those who don't know diabetes:
+# Make sure they had fasting blood taken and check gluccat_mc1 variable for diabetes information
+# Replace the don't knows with 1 if diabetes and 0 if no diabetes/pre-diabetes (if fasting)
+# if not fasting, check hba1c score 
+
+cham %>% filter(diab_mc1 == 999)
+
+# check: among those who self report no diabetes, how many do not have a fasting blood
+# sugar score and have a hba1ccat_mc1 score that show diabetes
+cham %>% filter(diab_mc1 == 0 & fast_bld_mc1 == 0 & hba1ccat_mc1 == 4)
+
+# check: among those who report no diabetes, how many do have a fasting blood sugar
+# and blood sugar is in diabetes category
+recat_diab <- cham %>% filter(diab_mc1 == 0 & fast_bld_mc1 == 1 & gluccat_mc1 == 3)
+
+cham <- cham %>% mutate(diab_mc1 = ifelse(newid %in% c(recat_diab$newid), 1, 
+                                          diab_mc1))
+
+cham <- cham %>% mutate(diab_mc1 = ifelse(newid == 222 & gluccat_mc1 == 2, 0, diab_mc1))
+
+cham %>% group_by(diab_mc1) %>% count()
+
+cham %>% filter(diab_mc1 == 0 & is.na(fast_bld_mc1))
+
+# 4 missing heart issues - can't adjust b/c other heart variables are from 18 year and show 
+# no heart issues - can't be sure they didn't develop heart issues between then and now 
+
+
+# For those who don't know cancer: 
+# Check cancer_m18y variable
+# Replace don't knows with 1 if ever had cancer 
+cham %>% filter(cancer_mc1 == 999)
+
+cham <- cham %>% mutate(cancer_mc1 = ifelse(newid == 607 & cancer_m18y == 1, 1, cancer_mc1))
+
+cham %>% group_by(cancer_mc1) %>% count()
+# 3 left over missing cancer info
+
+# 2 missing asthma - can't adjust b/c other asthma vars from 16y follow-up 
+# show no asthma - can't be sure they didn't get asthma between then and now
+
+
+# calculate overall self-rated health score
+cham <- cham %>% mutate(summary_health = diab_mc1 + hbp_mc1 +
+                                          heart_mc1 + cancer_mc1 + 
+                                          asth_mc1 + thyr_mc1)
+
+# re-code overall self-rated doctor diagnosed health scores into categories
+# 0 - no major health issues
+# 1 - 1 health issue
+# 2-5: 2+ health issues
+# 999 - 1 don't know, rest no
+# 1000 = 1 yes, 1 dont know, rest no
+# 1001 = 2 yes, 1 dont know, rest no
+# 1002 = 3 yes, 1 dont know, rest no
+# 2000 = 2 yes, 2 don't know, rest no
+# NA - missing
+
+# Group by yeses:
+# No major health issues: 0
+# 1 health issue: 1, 1000
+# 2-5 health issues: 2-7, 1001, 1002, 2000
+# Missing: NA
+cham_tab1 <- cham_tab1 %>% mutate(summary_health_cat_yes = 
+                                 ifelse(summary_health == 0 | 
+                                        summary_health == 999, "no health issues", 
+                                 ifelse(summary_health == 1 |
+                                        summary_health == 1000, "1 health issue", 
+                                 ifelse(summary_health > 1 & summary_health <= 7| 
+                                        summary_health %in% c(1001, 1002, 2000), "2+",
+                                        NA))))
+
+# filter out woman missing most baseline data
+cham <- cham %>% filter(!newid == 314)
+
+# select relevant variables for regression models
+cham_social <- cham %>% dplyr::select(newid, cham, qx_matcog,
+                                      povcat_mc1, pov_binary,
+                                      ficat_mc1, ppb2_mc1, ppr_1, ppr_1_update,
+                                      wry_dep_mc1, stress_personal_health_mc1,
+                                      stress_other_health_mc1, stress_job_mc1, stress_fin_mc1, 
+                                      stress_relat_mc1, stress_take_care_mc1, stress_parent_mc1, 
+                                      stress_disaster_mc1, stress_covid_mc1, 
+                                      stress_else_mc1, # exposures
+                                      memory_mc1, execfun_rc_mc1, verbal_rc_mc1,
+                                      global_rc_mc1, execfun_tbex_mc1,
+                                      global_tbex_mc1,
+                                      tmtb_fail_mc1, # outcomes
+                                      age_qx_mc1, momdl_age,
+                                      educcat_mom,
+                                      ageusa_bl, ageusa_cat, ageusa_18,
+                                      married, marstat_m18y,
+                                      work_mc1, workc_mc1, lang_exam_mc1,
+                                      depress_mc1, depress_m18y, depress_m16y,
+                                      depresscat_mc1, depresscat_m18y, depresscat_m16y,
+                                      dep_mc1,
+                                      
+                                      summary_health, summary_health_cat_yes, 
+                                      diab_mc1, hbp_mc1, heart_mc1, cancer_mc1,
+                                      asth_mc1, thyr_mc1, # covariates
+                                      hbp_bl, hbpage_bl, diab_bl, diabage_bl,
+                                      cancer_bl, cancerage_bl,
+                                      marstat_bl, worksp_bl, workc_bl, 
+                                      povcat_bl, ipovcat_bl, ipovcat_bl_met) # baseline vars
+                                      
+
+# MatCog participants
+cham_mc <- cham %>% filter(!is.na(age_qx_mc1))
+```
+
+

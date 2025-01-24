@@ -22,6 +22,7 @@ Basic model of g-computation:
 library(qgcomp)
 library(ggplot2)
 library(dplyr)
+library(broom)
 ```
  
  
@@ -60,7 +61,7 @@ qc.fit$qx %>% dplyr::select(arsenic_q) %>% group_by(arsenic_q) %>% count()
 # 75%-100%: 3
 
 # underlying model of qgcomp fit
-qc.fit$qx$y <- qc.fit$fit$data$y # bring outcome back into quantized data
+qc.fit$qx$y <- qc.fit$fit$data$y  # bring outcome back into quantized data
 
 # adjusted coefficients from underlying model
 # absolute change in outcome by increasing each exposure by 1
@@ -90,7 +91,6 @@ qc.fit2$qx$disease_state <- qc.fit2$fit$data$disease_state # bring outcome back 
 
 # adjusted coefficients from underlying model
 # absolute change in outcome by increasing each exposure by 1
-# can also use qc.fit2$fit
 newfit2 <- glm(disease_state ~ arsenic_q + barium_q + cadmium_q + calcium_q + 
                chromium_q + copper_q + iron_q + lead_q + magnesium_q + 
                manganese_q + mercury_q + selenium_q + silver_q + sodium_q + 
@@ -179,9 +179,42 @@ sum(newbootfit2$coefficients[-1]) # sums to psi_1
 coef(qcboot.fit2)
 
 ```
+
  
+```{r, age-adjusted linear model}
+qc.fit3 <- qgcomp.glm.noboot(y ~ mage35 + arsenic + barium + cadmium + calcium + chloride + 
+                           chromium + copper + iron + lead + magnesium + manganese + 
+                           mercury + selenium + silver + sodium + zinc,
+                           expnms = Xnm, 
+                           metals, family = gaussian(), q = 4)
+qc.fit3
+
+# underlying model of qgcomp fit
+qc.fit3$qx$y <- qc.fit3$fit$data$y # bring outcome back into quantized data
+qc.fit3$qx$mage35 <- qc.fit3$fit$data$mage35 # bring maternal age back into quantized data
+qc.fit3$qx$chloride <- qc.fit3$fit$data$chloride # bring chloride back into quantized data
+
+# adjusted coefficients from underlying model
+# absolute change in outcome by increasing each exposure by 1
+newfit3 <- lm(y ~ mage35 +chloride + arsenic_q + barium_q + cadmium_q + calcium_q + 
+               chromium_q + copper_q + iron_q + lead_q + magnesium_q + 
+               manganese_q + mercury_q + selenium_q + silver_q + sodium_q + 
+               zinc_q, data = qc.fit3$qx)
+
+tidy(newfit3)
+
+# add main exposure coefficients together - these should equal psi1 from qc.fit3
+tidy(newfit3) %>% filter(!term %in% c("(Intercept)", "mage35", "chloride")) %>% summarize(sum = sum(estimate))
+
+qc.fit3 # psi1 is equal to sum of coefficients above
+```
  
- 
+```{r, plot of exposure effects}
+plot(qc.fit3)
+```
+*weights = proportion of effect in a particular direction
+
+*Left and right sides of the plot should not be compared because the lengths of the bars correspond to the effect size relative to the effects in the same direction
  
  
  
