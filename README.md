@@ -10,5 +10,7 @@ Within each overarching project directory, there are additional directories with
 - MatCog
   - Lifecourse SES
   - Household Crowding
+  - Environmental Mixtures
+  - Social Mixtures
 - Other
   - Other
