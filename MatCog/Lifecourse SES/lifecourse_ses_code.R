@@ -1,11 +1,19 @@
 ################################################################################################
-# NAME:         Pesticides and cardiometabolic risk factors (pest_cmd_qgcomp.R)
-# AUTHORS:      Kelsey MacCuish
+# NAME:         Lifecourse Socioeconomic Status and Cognitive Performance Among Midlife Latina Women in a California Agricultural Region
+# AUTHOR:       Kelsey MacCuish
 # CREATED:      11/06/2023
-# PURPOSE:      Script to run quantile G-computation to analyze associations of mixtures of pesticides, 
-#               measured using Pesticide Use Reporting Data and urinary biomarkers, and cardio-metabolic risk 
-#               factors in CHAMACOS moms
-#  
+# CONTENTS:     Table 2. Overall Descriptive Characteristics, CHAMACOS Maternal Cognition Study (lines 252-273)
+#               Table 3. Models of Association between Lifecourse SES and Domain-Specific and Global Cognitive Z-Scores (lines 1160 - 1491)
+#               Figure 2. Mean Difference in each Cognitive Outcome (lines 4601 - 4649)
+#               Appendix Table 1. Comparison of Baseline Characteristics Overall and by Maternal Cognition Study Participants (lines 4653 - 4975)
+#               Appendix Table 4. Results Excluding Respondents Who Completed Phone-Based Visits (lines 1692 - 1914)
+#               Appendix Table 5. Results Excluding Trails Making Test B from the Executive Function and Global Composite Scores (lines 1918 - 2048)
+#               Appendix Table 6. Results with Binary Poverty Measure, Excluding Missing Cases (lines 2051 - 2177)
+#               Appendix Table 7. Results Controlling for Hypertension and Diabetes (lines 2181 - 2524)
+#               Appendix Table 8. Results with Inverse Probability of Attrition Weights (lines 4979 - 5259)
+#               Appendix Table 9. Mean Difference in Cognitive Outcomes (lines 2886 - 4582)
+#               Appendix Table 10. Lifecourse SES Exposure Patterns for CHAMACOS Maternal Cognition Study Participants (lines 277 - 327)
+#               Appendix Figure 1. Map of the Salinas Valley within the State of California (lines 5207 - 5378)
 ################################################################################################
 
 #### Load libraries ####
@@ -241,7 +249,7 @@ cham_tab1 <- cham_tab1_col %>% filter(!is.na(age_qx_mc1))
 
 
 
-#### Create table 1 ####
+#### Table 2. Overall Descriptive Characteristics, CHAMACOS Maternal Cognition Study ####
 
 # set up variables for CreateTableOne 
 vars <- c("age_qx_mc1", "ageusa_cat", "lang_exam_mc1", 
@@ -265,6 +273,8 @@ cham_tab1$aces_cat <- relevel(cham_tab1$aces_cat, ref = "0")
 CreateTableOne(vars = vars, data = cham_tab1)
 
 
+
+#### Appendix Table 10. Lifecourse SES Exposure Patterns for CHAMACOS Maternal Cognition Study Participants ####
 
 #### Create new variables for descriptive lifeourse tables ####
 
@@ -1147,6 +1157,9 @@ ggplot(data = cham_msm_pov, aes(x = ipw_combined)) +
 
 
 
+#### Table 3. Models of Association between Lifecourse SES and Domain-Specific and Global Cognitive Z-Scores #### 
+
+
 #### MSM WITH MEMORY SCORE OUTCOME ####
 
 
@@ -1676,137 +1689,7 @@ ggplot(data = all_results, aes(x = beta, y = exposure, color = type)) +
 #### SENSITIVITY ANALYSES ####
 
 
-### Executive function using variable that excludes trails B ###
-
-## Parental education
-msm_exec_parent_sens <- lm(execfun_tbex_mc1 ~ parent_educ + age_qx_mc1 +
-                           ageusa_cat + lang_exam_mc1,
-                           data = cham_msm_pov)
-
-# summarize regression output
-summary(msm_exec_parent_sens)
-
-# calculate 95% CIs
-beta <- coef(msm_exec_parent_sens)
-SE <- coef(summary(msm_exec_parent_sens))[,2]
-lcl <- beta-qnorm(0.975)*SE 
-ucl <- beta+qnorm(0.975)*SE
-cbind(beta, lcl, ucl)
-
-# calculate number of observations used in linear regression model
-nobs(msm_exec_parent_sens)
-
-
-## Own education
-msm_exec_own_educ_sens <- lm(execfun_tbex_mc1 ~ educcat_mom + parent_educ + 
-                             age_qx_mc1 + ageusa_cat +
-                             lang_exam_mc1, 
-                             data = cham_msm_pov,
-                             weights = ipw_own_educ)
-
-# summarize regression output
-summary(msm_exec_own_educ_sens)
-
-# calculate 95% CIs
-beta <- coef(msm_exec_own_educ_sens)
-SE <- coef(summary(msm_exec_own_educ_sens))[,2]
-lcl <- beta-qnorm(0.975)*SE 
-ucl <- beta+qnorm(0.975)*SE
-cbind(beta, lcl, ucl)
-
-# calculate number of observations used in linear regression model
-nobs(msm_exec_own_educ_sens)
-
-
-## Poverty
-msm_exec_poverty_sens <- lm(execfun_tbex_mc1 ~ pov_cat + educcat_mom + parent_educ + 
-                            age_qx_mc1 + ageusa_cat +
-                            lang_exam_mc1, 
-                            data = cham_msm_pov, 
-                            weights = ipw_combined)
-
-# summarize regression output
-summary(msm_exec_poverty_sens)
-
-# calculate 95% CIs
-beta_sens <- coef(msm_exec_poverty_sens)
-SE_sens <- coef(summary(msm_exec_poverty_sens))[,2]
-lcl_sens <- beta_sens-qnorm(0.975)*SE_sens
-ucl_sens <- beta_sens+qnorm(0.975)*SE_sens
-cbind(beta_sens, lcl_sens, ucl_sens)
-
-# calculate number of observations used in model
-nobs(msm_exec_poverty_sens)
-
-
-### Global function using variable that excludes trail B ###
-
-## Parental education
-msm_global_parent_sens <- lm(global_tbex_mc1 ~ parent_educ + age_qx_mc1 +
-                             ageusa_cat + lang_exam_mc1,
-                             data = cham_msm_pov)
-
-# summarize regression output
-summary(msm_global_parent_sens)
-
-# calculate 95% CIs
-beta <- coef(msm_global_parent_sens)
-SE <- coef(summary(msm_global_parent_sens))[,2]
-lcl <- beta-qnorm(0.975)*SE 
-ucl <- beta+qnorm(0.975)*SE
-cbind(beta, lcl, ucl)
-
-# calculate number of observations used in model
-nobs(msm_global_parent_sens)
-
-
-## Own education
-msm_global_own_educ_sens <- lm(global_tbex_mc1 ~ educcat_mom + parent_educ + 
-                               age_qx_mc1 + ageusa_cat +
-                               lang_exam_mc1,
-                               data = cham_msm_pov,
-                               weights = ipw_own_educ)
-
-# summarize regression output
-summary(msm_global_own_educ_sens)
-
-# calculate 95% CIs
-beta <- coef(msm_global_own_educ_sens)
-SE <- coef(summary(msm_global_own_educ_sens))[,2]
-lcl <- beta-qnorm(0.975)*SE 
-ucl <- beta+qnorm(0.975)*SE
-cbind(beta, lcl, ucl)
-
-# calculate number of observations used in linear regression model
-nobs(msm_global_own_educ_sens)
-
-
-## Poverty
-msm_global_poverty_sens <- lm(global_tbex_mc1 ~ pov_cat + educcat_mom + parent_educ + 
-                              age_qx_mc1 + ageusa_cat +
-                              lang_exam_mc1, 
-                              data = cham_msm_pov, 
-                              weights = ipw_combined)
-
-# summarize regression output
-summary(msm_global_poverty_sens)
-
-# calculate 95% CIs
-beta <- coef(msm_global_poverty_sens)
-SE <- coef(summary(msm_global_poverty_sens))[,2]
-lcl <- beta-qnorm(0.975)*SE 
-ucl <- beta+qnorm(0.975)*SE
-cbind(beta, lcl, ucl)
-
-# calculate number of observations used in model
-nobs(msm_global_poverty_sens)
-
-
-# test whether models are significantly different 
-anova(msm_exec_poverty, msm_exec_poverty_sens)
-anova(msm_global_poverty, msm_global_poverty_sens)
-
-
+#### Appendix Table 4. Results Excluding Respondents Who Completed Phone-Based Visits ####
 
 ### Removing 7 individuals who completed the survey over the phone ###
 phone_interview_participants <- cham %>% filter(newid %in% c(cham_msm_full$newid)) %>% 
@@ -1851,8 +1734,8 @@ nobs(msm_memory_own_educ_no_phone)
 
 ## Poverty
 msm_memory_poverty_no_phone <- lm(memory_mc1 ~ pov_cat + educcat_mom + parent_educ +
-                                  age_qx_mc1 + ageusa_cat +
-                                  lang_exam_mc1,
+                                 age_qx_mc1 + ageusa_cat +
+                                 lang_exam_mc1,
                                   data = cham_no_phone,
                                   weights = ipw_combined)
 
@@ -2032,13 +1915,147 @@ nobs(msm_global_poverty_no_phone)
 
 
 
+#### Appendix Table 5. Results Excluding Trails Making Test B from the Executive Function and Global Composite Scores ####
+
+### Executive function using variable that excludes trails B ###
+
+## Parental education
+msm_exec_parent_sens <- lm(execfun_tbex_mc1 ~ parent_educ + age_qx_mc1 +
+                           ageusa_cat + lang_exam_mc1,
+                           data = cham_msm_pov)
+
+# summarize regression output
+summary(msm_exec_parent_sens)
+
+# calculate 95% CIs
+beta <- coef(msm_exec_parent_sens)
+SE <- coef(summary(msm_exec_parent_sens))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression model
+nobs(msm_exec_parent_sens)
+
+
+## Own education
+msm_exec_own_educ_sens <- lm(execfun_tbex_mc1 ~ educcat_mom + parent_educ + 
+                             age_qx_mc1 + ageusa_cat +
+                             lang_exam_mc1, 
+                             data = cham_msm_pov,
+                             weights = ipw_own_educ)
+
+# summarize regression output
+summary(msm_exec_own_educ_sens)
+
+# calculate 95% CIs
+beta <- coef(msm_exec_own_educ_sens)
+SE <- coef(summary(msm_exec_own_educ_sens))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression model
+nobs(msm_exec_own_educ_sens)
+
+
+## Poverty
+msm_exec_poverty_sens <- lm(execfun_tbex_mc1 ~ pov_cat + educcat_mom + parent_educ + 
+                            age_qx_mc1 + ageusa_cat +
+                            lang_exam_mc1, 
+                            data = cham_msm_pov, 
+                            weights = ipw_combined)
+
+# summarize regression output
+summary(msm_exec_poverty_sens)
+
+# calculate 95% CIs
+beta_sens <- coef(msm_exec_poverty_sens)
+SE_sens <- coef(summary(msm_exec_poverty_sens))[,2]
+lcl_sens <- beta_sens-qnorm(0.975)*SE_sens
+ucl_sens <- beta_sens+qnorm(0.975)*SE_sens
+cbind(beta_sens, lcl_sens, ucl_sens)
+
+# calculate number of observations used in model
+nobs(msm_exec_poverty_sens)
+
+
+### Global function using variable that excludes trail B ###
+
+## Parental education
+msm_global_parent_sens <- lm(global_tbex_mc1 ~ parent_educ + age_qx_mc1 +
+                             ageusa_cat + lang_exam_mc1,
+                             data = cham_msm_pov)
+
+# summarize regression output
+summary(msm_global_parent_sens)
+
+# calculate 95% CIs
+beta <- coef(msm_global_parent_sens)
+SE <- coef(summary(msm_global_parent_sens))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in model
+nobs(msm_global_parent_sens)
+
+
+## Own education
+msm_global_own_educ_sens <- lm(global_tbex_mc1 ~ educcat_mom + parent_educ + 
+                               age_qx_mc1 + ageusa_cat +
+                               lang_exam_mc1,
+                               data = cham_msm_pov,
+                               weights = ipw_own_educ)
+
+# summarize regression output
+summary(msm_global_own_educ_sens)
+
+# calculate 95% CIs
+beta <- coef(msm_global_own_educ_sens)
+SE <- coef(summary(msm_global_own_educ_sens))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression model
+nobs(msm_global_own_educ_sens)
+
+
+## Poverty
+msm_global_poverty_sens <- lm(global_tbex_mc1 ~ pov_cat + educcat_mom + parent_educ + 
+                              age_qx_mc1 + ageusa_cat +
+                              lang_exam_mc1, 
+                              data = cham_msm_pov, 
+                              weights = ipw_combined)
+
+# summarize regression output
+summary(msm_global_poverty_sens)
+
+# calculate 95% CIs
+beta <- coef(msm_global_poverty_sens)
+SE <- coef(summary(msm_global_poverty_sens))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in model
+nobs(msm_global_poverty_sens)
+
+
+# test whether models are significantly different 
+anova(msm_exec_poverty, msm_exec_poverty_sens)
+anova(msm_global_poverty, msm_global_poverty_sens)
+
+
+#### Appendix Table 6. Results with Binary Poverty Measure, Excluding Missing Cases ####
+
 ### Binary poverty variable ###
 
 ## weights for poverty variable re-categorizing missings
 
 # denominator using own education, parent education, years in the US, ACEs, age, 
-# married status, working since last visit status, depression (CESD) score,
-# anxiety (GAD) score, summary self-rated doctor diagnosed health score, and housing density
+# married status, working since last visit status, and summary self-rated doctor diagnosed health score
 
 # re-categorize those with missing poverty information as part of 
 # at or below poverty level
@@ -2161,6 +2178,353 @@ nobs(msm_global_poverty)
 
 
 
+#### Appendix Table 7. Results Controlling for Hypertension and Diabetes ####
+
+
+cham_hd <- cham_msm_pov %>% filter(!(is.na(hbp_mc1) | is.na(diab_mc1)))
+
+# weights for own education
+
+# use previous exposure (parent education) to calculate numerator
+model_num_own_educ <- 1
+
+# denominator using parent education, age arrived to US, ACEs, and age
+model_denom_own_educ_hd <- glm(own_educ_dich_num ~ parent_educ_dich_num + 
+                               ageusa_cat + aces + age_qx_mc1 + 
+                               lang_exam_mc1,
+                               data = cham_hd, 
+                               family = binomial(link = "logit"))
+
+
+# predict outcomes using models
+pred_denom_own_educ_hd <- predict(model_denom_own_educ_hd, type = "response")
+
+
+# calculate IPW for own education using predictions
+# filter out records that have NAs for aces (only variable that has NAs) to calculate weights properly
+cham_msm_own_educ_hd <- cham_hd %>% filter(!is.na(aces_cat)) %>%
+  mutate(ipw_own_educ = ifelse(own_educ_dich_num == 0, 
+                               1/(1-pred_denom_own_educ_hd), 1/pred_denom_own_educ_hd))
+
+
+# weights for poverty 
+model_num_poverty <- 1
+
+## weights for poverty variable including missings as its own category
+
+# denominator using own education, parent education, age arrived to US, ACEs, age, 
+# married status, working since last visit status, summary self-rated doctor diagnosed health score, hypertension, and diabetes
+model_denom_poverty_hd <- multinom(pov_cat ~ own_educ_dich_num + 
+                                   parent_educ_dich_num + age_qx_mc1 + ageusa_cat +
+                                   lang_exam_mc1 +
+                                   aces + married + work_mc1 + 
+                                   summary_health_cat_yes + hbp_mc1 + 
+                                   diab_mc1,
+                                   data = cham_msm_own_educ_hd)
+
+# predict outcomes using model
+pred_denom_poverty_hd <- predict(model_denom_poverty_hd, type = "probs")
+
+# create new dataframe with prediction probabilities
+m1 <- pred_denom_poverty_hd[,1]
+m2 <- pred_denom_poverty_hd[,2]
+m3 <- pred_denom_poverty_hd[,3]
+
+pov_pred_hd <- as.data.frame(cbind(m1, m2, m3))
+
+# calculate inverse probabilities as 1/probability
+pov_pred_hd <- pov_pred_hd %>% mutate(p1 = 1/m1, p2 = 1/m2, p3 = 1/m3)
+
+
+# calculate IPW for poverty using predictions
+# filter out observations that are missing any covariates
+cham_msm_pov_hd <- cham_msm_own_educ_hd %>% filter(
+  !is.na(summary_health_cat_yes) & 
+    !is.na(lang_exam_mc1) & !is.na(hbp_mc1) & !is.na(diab_mc1))
+
+cham_msm_pov_hd$pov_weight <- ifelse(
+  cham_msm_pov_hd$pov_cat == "at or below poverty level", pov_pred_hd$p1, 
+  ifelse(cham_msm_pov_hd$pov_cat == "above poverty level", pov_pred_hd$p2, 
+         ifelse(cham_msm_pov_hd$pov_cat == "Missing", pov_pred_hd$p3, NA)))
+
+# check weights 
+cbind(cham_msm_pov_hd, pov_pred_hd) %>% dplyr::select(pov_cat, pov_weight, m1, m2, m3, p1, p2, p3)
+
+
+
+# multiply poverty weight and own education weight
+cham_msm_pov_hd <- cham_msm_pov_hd %>% mutate(ipw_combined = ipw_own_educ * pov_weight)
+
+## trim weights at 99th percentile
+new_cut_off <- quantile(cham_msm_pov_hd$ipw_combined, .99)
+
+cham_msm_pov_hd <- cham_msm_pov_hd %>% 
+  mutate(ipw_combined = ifelse(ipw_combined > new_cut_off, new_cut_off, ipw_combined))
+
+ggplot(data = cham_msm_pov_lang, aes(x = ipw_combined)) + 
+  geom_histogram()
+
+
+### Memory composite
+
+## Parent education 
+msm_memory_parent <- lm(memory_mc1 ~ parent_educ + age_qx_mc1 +
+                        ageusa_cat + lang_exam_mc1,
+                        data = cham_msm_pov_hd)
+
+# summarize regression output
+summary(msm_memory_parent)
+
+# calculate 95% CIs
+beta <- coef(msm_memory_parent)
+SE <- coef(summary(msm_memory_parent))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_memory_parent)
+
+
+## Own education
+# already removed observations that are missing ACES information
+
+# run linear regression
+msm_memory_own_educ <- lm(memory_mc1 ~ educcat_mom + parent_educ + 
+                          age_qx_mc1 + ageusa_cat + lang_exam_mc1,
+                          data = cham_msm_pov_hd,
+                          weights = ipw_own_educ)
+
+
+# summarize regression output
+summary(msm_memory_own_educ)
+
+# calculate 95% CIs
+beta <- coef(msm_memory_own_educ)
+SE <- coef(summary(msm_memory_own_educ))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_memory_own_educ)
+
+
+## Poverty
+msm_memory_poverty <- lm(memory_mc1 ~ pov_cat + educcat_mom + parent_educ +
+                         age_qx_mc1 + ageusa_cat + lang_exam_mc1 +
+                         hbp_mc1 + diab_mc1,
+                         data = cham_msm_pov_hd,
+                         weights = ipw_combined)
+
+# summarize regression output
+# calculate 95% CIs
+beta <- coef(msm_memory_poverty)
+SE <- coef(summary(msm_memory_poverty))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_memory_poverty)
+
+
+
+### Executive Function
+
+## Parent education 
+msm_exec_parent <- lm(execfun_rc_mc1 ~ parent_educ + age_qx_mc1 +
+                      ageusa_cat + lang_exam_mc1,
+                      data = cham_msm_pov_hd)
+
+# summarize regression output
+summary(msm_exec_parent)
+
+# calculate 95% CIs
+beta <- coef(msm_exec_parent)
+SE <- coef(summary(msm_exec_parent))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_exec_parent)
+
+
+## Own education
+# already removed observations that are missing ACES information
+
+# run linear regression
+msm_exec_own_educ <- lm(execfun_rc_mc1 ~ educcat_mom + parent_educ + 
+                        age_qx_mc1 + ageusa_cat + lang_exam_mc1,
+                        data = cham_msm_pov_hd,
+                        weights = ipw_own_educ)
+
+
+# summarize regression output
+summary(msm_exec_own_educ)
+
+# calculate 95% CIs
+beta <- coef(msm_exec_own_educ)
+SE <- coef(summary(msm_exec_own_educ))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_exec_own_educ)
+
+
+## Poverty
+msm_exec_poverty <- lm(execfun_rc_mc1 ~ pov_cat + educcat_mom + parent_educ +
+                       age_qx_mc1 + ageusa_cat + lang_exam_mc1 +
+                       hbp_mc1 + diab_mc1,
+                       data = cham_msm_pov_hd,
+                       weights = ipw_combined)
+
+# summarize regression output
+# calculate 95% CIs
+beta <- coef(msm_exec_poverty)
+SE <- coef(summary(msm_exec_poverty))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_exec_poverty)
+
+
+
+### Verbal Fluency
+
+## Parent education 
+msm_verbal_parent <- lm(verbal_rc_mc1 ~ parent_educ + age_qx_mc1 +
+                        ageusa_cat + lang_exam_mc1,
+                        data = cham_msm_pov_hd)
+
+# summarize regression output
+summary(msm_verbal_parent)
+
+# calculate 95% CIs
+beta <- coef(msm_verbal_parent)
+SE <- coef(summary(msm_verbal_parent))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_verbal_parent)
+
+
+## Own education
+# already removed observations that are missing ACES information
+
+# run linear regression
+msm_verbal_own_educ <- lm(verbal_rc_mc1 ~ educcat_mom + parent_educ + 
+                          age_qx_mc1 + ageusa_cat + lang_exam_mc1,
+                          data = cham_msm_pov_hd,
+                          weights = ipw_own_educ)
+
+
+# summarize regression output
+summary(msm_verbal_own_educ)
+
+# calculate 95% CIs
+beta <- coef(msm_verbal_own_educ)
+SE <- coef(summary(msm_verbal_own_educ))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_verbal_own_educ)
+
+
+## Poverty
+msm_verbal_poverty <- lm(verbal_rc_mc1 ~ pov_cat + educcat_mom + parent_educ +
+                       age_qx_mc1 + ageusa_cat + lang_exam_mc1 + 
+                       hbp_mc1 + diab_mc1,
+                       data = cham_msm_pov_hd,
+                       weights = ipw_combined)
+
+# summarize regression output
+# calculate 95% CIs
+beta <- coef(msm_verbal_poverty)
+SE <- coef(summary(msm_verbal_poverty))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_verbal_poverty)
+
+
+
+### Global Function
+
+## Parent education 
+msm_global_parent <- lm(global_rc_mc1 ~ parent_educ + age_qx_mc1 +
+                        ageusa_cat + lang_exam_mc1,
+                        data = cham_msm_pov_hd)
+
+# summarize regression output
+summary(msm_global_parent)
+
+# calculate 95% CIs
+beta <- coef(msm_global_parent)
+SE <- coef(summary(msm_global_parent))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_global_parent)
+
+
+## Own education
+# already removed observations that are missing ACES information
+
+# run linear regression
+msm_global_own_educ <- lm(global_rc_mc1 ~ educcat_mom + parent_educ + 
+                          age_qx_mc1 + ageusa_cat + lang_exam_mc1,
+                          data = cham_msm_pov_hd,
+                          weights = ipw_own_educ)
+
+
+# summarize regression output
+summary(msm_global_own_educ)
+
+# calculate 95% CIs
+beta <- coef(msm_global_own_educ)
+SE <- coef(summary(msm_global_own_educ))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_global_own_educ)
+
+
+## Poverty
+msm_global_poverty <- lm(global_rc_mc1 ~ pov_cat + educcat_mom + parent_educ +
+                         age_qx_mc1 + ageusa_cat + lang_exam_mc1 + 
+                         hbp_mc1 + diab_mc1,
+                         data = cham_msm_pov_hd,
+                         weights = ipw_combined)
+
+# summarize regression output
+# calculate 95% CIs
+beta <- coef(msm_global_poverty)
+SE <- coef(summary(msm_global_poverty))[,2]
+lcl <- beta-qnorm(0.975)*SE 
+ucl <- beta+qnorm(0.975)*SE
+cbind(beta, lcl, ucl)
+
+# calculate number of observations used in linear regression
+nobs(msm_global_poverty)
+
+
+
 ### Language of assessment and nativity ###
 
 
@@ -2202,13 +2566,12 @@ model_num_poverty <- 1
 ## weights for poverty variable including missings as its own category
 
 # denominator using own education, parent education, age arrived to US, ACEs, age, 
-# married status, working since last visit status, depression (CESD) score,
-# anxiety (GAD) score, summary self-rated doctor diagnosed health score, and housing density
+# married status, working since last visit status, and summary self-rated doctor diagnosed health score
 model_denom_poverty_lang <- multinom(pov_cat ~ own_educ_dich_num + 
                                      parent_educ_dich_num + age_qx_mc1 + ageusa_cat +
                                      lang_exam_mc1 +
                                      aces + married + work_mc1 + 
-                                     summary_health_cat_yes + density1_mc1, 
+                                     summary_health_cat_yes, 
                                      data = cham_msm_own_educ_lang)
 
 # check for multicollinearity - shows collinearity in poverty model
@@ -2371,13 +2734,13 @@ model_num_poverty <- 1
 ## weights for poverty variable including missings as its own category
 
 # denominator using own education, parent education, age arrived to US, ACEs, age, 
-# married status, working since last visit status, 
-# summary self-rated doctor diagnosed health score, and housing density
+# married status, working since last visit status, and
+# summary self-rated doctor diagnosed health score
 model_denom_poverty_lang <- multinom(pov_cat ~ own_educ_dich_num + 
                                      parent_educ_dich_num + age_qx_mc1 +
                                      lang_exam_mc1 +
                                      aces + married + work_mc1 + 
-                                     summary_health_cat_yes + density1_mc1, 
+                                     summary_health_cat_yes, 
                                      data = cham_msm_own_educ_lang)
 
 # check for multicollinearity - shows collinearity in poverty model
@@ -2519,6 +2882,8 @@ cor.test(cham_msm_pov_lang$lang_exam_num, cham_msm_pov_lang$ageusa_cat_num)
 summary(model)
 
 
+
+#### Appendix Table 9. Mean Difference in Cognitive Outcomes ####
 
 #### MEAN DIFFERENCE UNDER DIFFERENT LIFECOURSE EXPOSURE SCENARIOS ####
 
@@ -4233,6 +4598,8 @@ tidy(global_mean, conf.int = T)
 
 
 
+#### Figure 2. Mean Difference in each Cognitive Outcome ####
+
 ### Combine bootstrapped results ###
 
 bootstrap_results <- rbind(bootstrap_memory, bootstrap_exec, bootstrap_verbal, bootstrap_global)
@@ -4281,6 +4648,9 @@ ggplot(data = bootstrap_results, aes(x = estimate, y = type_long, color = outcom
 
 dev.off()
 
+
+
+#### Appendix Table 1. Comparison of Baseline Characteristics Overall and by Maternal Cognition Study Participants ####
 
 
 #### BASELINE SAMPLE CHARACTERISTICS ####
@@ -4605,6 +4975,8 @@ cham_2009_no_miss_cov %>% group_by(ipovcat_bl) %>% count()
 cham_2009_no_miss_cov %>% group_by(cancer_bl) %>% count()
 
 
+
+#### Appendix Table 8. Results with Inverse Probability of Attrition Weights ####
 
 #### IPAW FOR 2009 COHORT ####
 
@@ -4931,6 +5303,8 @@ cham_2009_cohort %>% group_by(diab_bl) %>% count()
 cham_2009_cohort %>% group_by(hbp_bl) %>% count()
 
 
+
+#### Appendix Figure 1. Map of the Salinas Valley within the State of California ####
 
 #### GENERATE MAPS OF STUDY SAMPLE ####
 
