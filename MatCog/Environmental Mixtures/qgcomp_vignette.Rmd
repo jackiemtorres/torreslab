@@ -79,12 +79,66 @@ coef(qc.fit)
 ```
  
  
+```{r, linear model only specifying one exposure}
+Xnm_new <- 'arsenic'
+
+# run linear model
+qc.fit.one.ex <- qgcomp.glm.noboot(y ~ arsenic + barium + cadmium + calcium +
+                           chromium + copper + iron + lead + magnesium + manganese + 
+                           mercury + selenium + silver + sodium + zinc,
+                           expnms=Xnm_new,
+                           metals, family=gaussian(), q=4)
+
+# scaled coefficients/weights and statistical inference about mixture effect
+# interpreted as the effect on the outcome of increasing every exposure by one quantile, possibly conditional on covariates (relative impact on outcome since all exposures are increasing by one quantile)
+
+qc.fit.one.ex 
+
+
+qc.fit.one.ex.data <- as.data.frame(qc.fit.one.ex$qx)
+qc.fit.one.ex.data$arsenic_q <- qc.fit.one.ex.data$`qc.fit.one.ex$qx`
+qc.fit.one.ex.data %>% select(-`qc.fit.one.ex$qx`)
+
+qc.fit.one.ex.data$y <- qc.fit.one.ex$fit$data$y  # bring outcome back into quantized data
+qc.fit.one.ex.data$calcium <- qc.fit.one.ex$fit$data$calcium
+qc.fit.one.ex.data$barium <- qc.fit.one.ex$fit$data$barium
+qc.fit.one.ex.data$cadmium <- qc.fit.one.ex$fit$data$cadmium
+qc.fit.one.ex.data$chromium <- qc.fit.one.ex$fit$data$chromium
+qc.fit.one.ex.data$copper <- qc.fit.one.ex$fit$data$copper
+qc.fit.one.ex.data$iron <- qc.fit.one.ex$fit$data$iron
+qc.fit.one.ex.data$lead <- qc.fit.one.ex$fit$data$lead
+qc.fit.one.ex.data$magnesium <- qc.fit.one.ex$fit$data$magnesium
+qc.fit.one.ex.data$manganese <- qc.fit.one.ex$fit$data$manganese
+qc.fit.one.ex.data$mercury <- qc.fit.one.ex$fit$data$mercury
+qc.fit.one.ex.data$selenium <- qc.fit.one.ex$fit$data$selenium
+qc.fit.one.ex.data$silver <- qc.fit.one.ex$fit$data$silver
+qc.fit.one.ex.data$sodium <- qc.fit.one.ex$fit$data$sodium
+qc.fit.one.ex.data$zinc <- qc.fit.one.ex$fit$data$zinc
+
+
+# adjusted coefficients from underlying model
+# absolute change in outcome by increasing each exposure by 1
+newfit.one.ex <- lm(y ~ arsenic_q + barium + cadmium + calcium + 
+               chromium + copper + iron + lead + magnesium + 
+               manganese + mercury + selenium + silver + sodium + 
+               zinc, data = qc.fit.one.ex.data)
+
+sum(newfit.one.ex$coefficients[-1]) # sums to psi_1 
+
+# you can also calculate each scaled effect size by calculating a sum of the positive coefficients and a sum of the negative coefficients and calculating the corresponding proportion each exposure contributes to each sum
+# e.g., calcium = 0.28/0.39 = 0.722 (0.722 is the scaled effect size calculated in qc.fit)
+
+coef(qc.fit)
+```
+ 
+ 
 ```{r, conditional odds ratio}
 # conditional odds ratio
 qc.fit2 <- qgcomp.glm.noboot(disease_state~., expnms = Xnm, 
                              data = metals[,c(Xnm, 'disease_state')], 
                              family = binomial(), q = 4)
 qc.fit2
+tidy(qc.fit2$fit)
 
 # underlying model of qgcomp fit
 qc.fit2$qx$disease_state <- qc.fit2$fit$data$disease_state # bring outcome back into quantized data

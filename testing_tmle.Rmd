@@ -1,0 +1,1833 @@
+---
+title: "Testing TMLE"
+author: "Kelsey MacCuish"
+output: pdf_document
+---
+
+```{r, load libraries}
+library(haven)
+library(dplyr)
+library(tableone)
+library(broom)
+library(ggplot2)
+library(tidyr)
+library(lme4)
+library(ggdag)
+library(broom.mixed)
+library(ipw)
+library(geepack)
+library(nnet)
+library(multcomp)
+library(RColorBrewer)
+library(tidycensus)
+library(usmap)
+library(tigris)
+library(boot)
+library(marginaleffects)
+library(forcats)
+library(mediation)
+library(devtools)
+library(lmtp)
+library(SuperLearner)
+library(medoutcon)
+library(crumble)
+library(mma)
+library(mlr3extralearners)
+library(HDmediation)
+library(hal9001)
+library(arm)
+library(ggsci)
+library(earth)
+library(viridis)
+library(xgboost)
+library(psych)
+library(corrr)
+set.seed(124)
+```
+
+
+```{r, read data}
+cham_all <- read_dta("../Code/torres_stressor_01i_nohsn.dta") # read in CHAMACOS data
+
+head(cham_all) # first 6 rows of dataset
+str(cham_all) # variables and variable types
+dim(cham_all) # number of observations and variables
+names(cham_all) # names of variables
+```
+
+
+## Data cleaning
+```{r, create new variables for table 1}
+# nativity
+# calculate age participant came back to the US at matcog visit 1
+# yrsusa_matcog = yrsusa_dl + (date_matcog - dlvrydt)/365.25 
+# yrsusa_matcog is years in the US at maternal cognition study visit 1
+cham <- cham_all %>% mutate(age_came_back_to_us = age_qx_mc1 - yrsusa_matcog)
+
+# compare ageusa_bl with calculated age got back to the US
+cham %>% dplyr::select(age_qx_mc1, yrsusa_matcog, ageusa_bl, age_came_back_to_us) %>% filter(!is.na(age_qx_mc1))
+
+# if ageusa_bl is -9, participant was born in the US
+cham <- cham %>% mutate(ageusa_bl = ifelse(ageusa_bl == -9, 0,
+                                                     ageusa_bl))
+
+# if ageusa_bl is < 0, set to 0
+cham <- cham %>% mutate(ageusa_bl = ifelse(ageusa_bl < 0, 0, ageusa_bl))
+
+cham %>% group_by(ageusa_bl) %>% count()
+
+# if ageusa_bl is missing, and age_qx_mc1 = yrsusa_matcog, replace ageusa_bl with age_came_back_to_us
+# if age at survey = number of years lived in the US, person has lived in the US their whole life
+# i.e., they did not leave and come back to the US
+cham <- cham %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & 
+                                           age_qx_mc1 - yrsusa_matcog < 1, age_came_back_to_us, 
+                                                     ageusa_bl))
+
+# check instances where there are discrepancies between ageusa_bl and calculated age_came_back_to_us
+cham %>% filter(abs(ageusa_bl - age_came_back_to_us) > 2) %>% 
+  dplyr::select(newid, age_qx_mc1, yrsusa_matcog, ageusa_bl, age_came_back_to_us, country_mom)
+
+# check distribution of age came to the US variable
+ggplot(data = cham, aes(x = ageusa_bl)) + 
+  geom_histogram()
+
+cham %>% filter(is.na(ageusa_bl)) %>% dplyr::select(newid, ageusa_bl, age_came_back_to_us,
+                                                    country_mom, age_qx_mc1, yrsusa_matcog)
+
+# set ageusa_bl to 0 for individuals with country_mom = 1 
+cham <- cham %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & country_mom == 1, 0, ageusa_bl))
+
+
+# categorize age came to the US variable 
+cham <- cham %>% mutate(ageusa_cat = 
+                        ifelse(country_mom == 1, "0",
+                        ifelse(ageusa_bl > 0 & ageusa_bl < 18, "<1-17", 
+                        ifelse(ageusa_bl >= 18 & ageusa_bl < 25, "18-24",
+                        ifelse(ageusa_bl >= 25, "25+", NA)))))
+
+# check age came to the us distribution among matcog participatns 
+cham %>% filter(!is.na(age_qx_mc1)) %>% group_by(ageusa_cat) %>% count()
+
+
+# check those missing age that came to the US variable
+cham %>% filter(is.na(ageusa_cat)) %>% dplyr::select(newid, country_mom, ageusa_bl, ageusa_cat,
+                                                     age_came_back_to_us, newid, yrsusa_matcog, 
+                                                     age_qx_mc1)
+
+# 7 individuals with ageusa_bl = 0 and country_mom = 2
+# recategorize these into "<1-17" group
+cham <- cham %>% mutate(ageusa_cat = ifelse(country_mom == 2 & is.na(ageusa_cat), "<1-17", ageusa_cat))
+
+# replace the two missing their ageusa_cat values with their calculated age_came_back_to_us values
+cham <- cham %>% mutate(ageusa_cat = ifelse(is.na(ageusa_cat), age_came_back_to_us, ageusa_cat))
+
+cham <- cham %>% mutate(ageusa_cat = ifelse(ageusa_cat == 17.3915138244629, "<1-17", 
+                                     ifelse(ageusa_cat == 23.0636558532715, "18-24", 
+                                            ageusa_cat)))
+
+cham %>% group_by(ageusa_cat) %>% count()
+
+# create adulthood arrival to the US variable: born in US, <18 and 18+
+cham <- cham %>% mutate(ageusa_18 = ifelse(ageusa_cat == "0", "0",
+                                    ifelse(ageusa_cat == "<1-17", "<18", "18+")))
+
+# create categorized language variable
+# 1 = English, 2 = Spanish
+cham <- cham %>% mutate(lang_exam_mc1 = ifelse(lang_exam_mc1 == 1, "English", "Spanish"))
+
+# create overall parental education variable
+# if don't know both parents education -> Don't know/Don't remember
+# if don't know mom & dad never attended or don't know dad & mom never attended or neither attended -> None, never attended school
+# all others -> any formal education
+cham <- cham %>% mutate(parent_educ = 
+                        ifelse(medu_mc1 == 9 &
+                               fedu_mc1 == 9,
+                               "Dont know/dont remember",
+                        ifelse(medu_mc1 == 9 &
+                               fedu_mc1 == 1
+                               | medu_mc1 == 1 & 
+                               fedu_mc1 == 9 | 
+                               medu_mc1 == 1 & 
+                               fedu_mc1 == 1, 
+                               "No formal education",
+                               "any formal educ")))
+
+# dichotomize marriage variable to married or not married
+# 1 or 2 = married, otherwise not married
+cham <- cham %>% mutate(married = 
+                 ifelse(married_mc1 == 1 | 
+                        married_mc1 == 2, "married", "not married"))
+
+
+# categorize worked since last visit variable
+# 1 = worked since last visit, 0 = did not work since last visit
+cham <- cham %>% mutate(work_mc1 = 
+                        ifelse(work_mc1 == 1, "Worked since last visit",
+                        ifelse(work_mc1 == 0, "Did not work since last visit", NA)))
+
+
+# categorize working now variable
+# 1 = working now, 0 = not working now
+cham <- cham %>% mutate(workc_mc1 = ifelse(workc_mc1 == 1, "Working now",
+                                    ifelse(workc_mc1 == 0, "Not working now",
+                                           NA)))
+
+
+# categorize mom's own education
+# 1: <= 6th grade, 2: 7-12th grade, 3: >= HS graduate
+cham <- cham %>% mutate(educcat_mom = ifelse(educcat_mom == 1, "<=6th grade", 
+                                      ifelse(educcat_mom == 2, "7-11th grade", 
+                                      ifelse(educcat_mom == 3, ">= HS graduate", NA))))
+
+
+# poverty status: povcat_mc1 
+cham <- cham %>% mutate(povcat_mc1 = ifelse(povcat_mc1 == 1, "At or below poverty",
+                                     ifelse(povcat_mc1 == 2, "200% FPL",
+                                     ifelse(povcat_mc1 == 3, ">=200% FPL", "Missing"))))
+cham %>% group_by(povcat_mc1) %>% count()
+
+
+# more than 2 people per bedroom: ppb2_mc1 
+cham <- cham %>% mutate(ppb2_mc1 = ifelse(ppb2_mc1 == 0, "<=2", ">2"))
+
+
+# sleep quality: slpqual_mc1 
+cham <- cham %>% mutate(slpqual_mc1 = ifelse(slpqual_mc1 == 0, "very sound/restful", 
+                                      ifelse(slpqual_mc1 == 1, "sound/restful", 
+                                      ifelse(slpqual_mc1 == 2, "average", 
+                                      ifelse(slpqual_mc1 == 3, "restless", "very restless")))))
+
+# nap frequency: napfq_mc1 
+cham <- cham %>% mutate(napfq_mc1 = ifelse(napfq_mc1 == 0, "0", 
+                                    ifelse(napfq_mc1 == 1, "1 or 2", 
+                                    ifelse(napfq_mc1 == 2, "3 or 4", "5+"))))
+
+# more than 1 person per room: ppr_1
+cham <- cham %>% mutate(ppr_1 = ifelse(dens1_cat_mc1 == 1 | dens1_cat_mc1 == 2, "<=1", 
+                                ifelse(dens1_cat_mc1 == 3 | dens1_cat_mc1 == 4, ">1", NA)))
+
+cham <- cham %>% mutate(ppr_1_update = ifelse(dens2_cat_mc1 == 1 | dens2_cat_mc1 == 2, "<=1", 
+                                ifelse(dens2_cat_mc1 == 3 | dens2_cat_mc1 == 4, ">1", NA)))
+
+
+# number of residents <18 years of age
+cham %>% filter(!is.na(age_qx_mc1)) %>% group_by(lvhome_n18_mc1) %>% count()
+
+
+# impute newid 763's weekend sleep with the average difference between weekday sleep and weekend sleep
+# average difference is 1.60 more hours of sleep on weekends than weekdays
+cham <- cham %>% filter(!is.na(age_qx_mc1)) %>% mutate(sleep_diff = slpwkend_mc1 - slpwkday_mc1)
+cham %>% dplyr::select(newid, slpwkend_mc1, slpwkday_mc1, sleep_diff)
+
+cham %>% filter(!is.na(sleep_diff)) %>% filter(!is.na(age_qx_mc1)) %>% summarize(med = median(sleep_diff), 
+                                            mean = mean(sleep_diff))
+
+cham <- cham %>% mutate(slpwkend_mc1 = ifelse(newid == 763, slpwkday_mc1 + 1.595583, slpwkend_mc1))
+
+
+# create average sleep per night (weighted average between weeknight and weekend sleep)
+cham <- cham %>% mutate(avg_sleep = ((slpwkday_mc1*5) + (slpwkend_mc1*2))/7)
+
+
+# create binary indicator for whether person has < 6 hrs sleep/night
+cham <- cham %>% mutate(less_6_hours = ifelse(avg_sleep < 6, "<6", ">=6"))
+
+
+# create binary poverty variable
+cham <- cham %>% mutate(pov_binary = ifelse(is.na(povcat_mc1) | 
+                                            povcat_mc1 == "At or below poverty", 
+                                            "At or below poverty", "Above poverty"))
+
+# create restless sleep variable
+cham <- cham %>% mutate(restless_sleep = ifelse(slpqual_mc1 == "restless" | slpqual_mc1 == "very restless", "restless", "restful"))
+
+cham %>% group_by(restless_sleep) %>% count()
+
+# create people per household variable
+cham <- cham %>% mutate(people_per_household = density1_mc1 * rooms_mc1)
+
+# filter out woman missing most baseline data
+cham <- cham %>% filter(!newid == 314)
+
+
+# filter to only include matcog participants
+cham_tab1 <- cham %>% filter(!is.na(age_qx_mc1))
+
+
+# calculate summary score of self-rated doctor diagnosed health conditions
+# diabetes
+# high blood pressure 
+# heart problems
+# cancer
+# asthma 
+# thyroid problems
+
+# re-code don't knows to 999
+cham_tab1 <- cham_tab1 %>% 
+  mutate(diab_mc1 = ifelse(diab_mc1 == 9, 999, diab_mc1),
+         hbp_mc1 = ifelse(hbp_mc1 == 9, 999, hbp_mc1),
+         # chol_mc1 = ifelse(chol_mc1 == 9, 999, chol_mc1),
+         heart_mc1 = ifelse(heart_mc1 == 9, 999, heart_mc1), 
+         cancer_mc1 = ifelse(cancer_mc1 == 9, 999, cancer_mc1), 
+         asth_mc1 = ifelse(asth_mc1 == 9, 999, asth_mc1), 
+         thyr_mc1 = ifelse(thyr_mc1 == 9, 999, thyr_mc1)) 
+
+# check distribution of each self-rated doctor diagnosed health condition
+cham_tab1 %>% group_by(diab_mc1) %>% count() # only 1 person missing diabetes score
+cham_tab1 %>% group_by(hbp_mc1) %>% count() # 3 missing HBP score
+cham_tab1 %>% group_by(chol_mc1) %>% count() # 6 missing cholesterol
+cham_tab1 %>% group_by(heart_mc1) %>% count() # 4 missing heart issues
+cham_tab1 %>% group_by(cancer_mc1) %>% count() # 4 missing cancer
+cham_tab1 %>% group_by(asth_mc1) %>% count() # 2 missing asthma
+cham_tab1 %>% group_by(thyr_mc1) %>% count() # 0 missing thyroid
+cham_tab1 %>% group_by(dep_mc1) %>% count() # 7 missing depression 
+cham_tab1 %>% group_by(anx_mc1) %>% count() # 9 missing anxiety
+
+
+# For those who don't know high blood pressure: 
+# Check bpcat_mc1 variable for blood pressure information
+# Replace the don't knows with 1 if have high blood pressure, 0 if no HBP
+# only don't have hypertension if 0 for hbp_mc1 and bpcat_mc1 is 1 or 2 
+cham_tab1 %>% filter(hbp_mc1 == 999)
+cham_tab1 %>% filter(hbp_mc1 == 0 & bpcat_mc1 %in% c(3, 4))
+
+recat_bp <- cham_tab1 %>% filter(hbp_mc1 == 0 & bpcat_mc1 %in% c(3, 4))
+
+cham_tab1 <- cham_tab1 %>% mutate(hbp_mc1 = ifelse(newid %in% c(recat_bp$newid), 1, 
+                                                         hbp_mc1))
+
+cham_tab1 <- cham_tab1 %>% mutate(hbp_mc1 = ifelse(newid == 99 & bpcat_mc1 == 3, 1,
+                                                  ifelse(newid == 102 & bpcat_mc1 == 1, 0,
+                                                  ifelse(newid == 617 & bpcat_mc1 == 1, 0,
+                                                  hbp_mc1))))
+
+
+# check that there are no more "don't know" responses for high blood pressure
+cham_tab1 %>% group_by(hbp_mc1) %>% count()
+
+# NOTE: removed cholesterol from summary score - effects of cholesterol on outcome 
+# accounted for with 
+# For those who don't know cholesterol: 
+# Check hdlcat_mc1 variable for cholesterol information
+# Replace the don't knows with 1 if have high cholesterol, 0 if no high cholesterol
+#cham_add_var %>% filter(chol_mc1 == 999)
+
+#cham_add_var <- cham_add_var %>% mutate(chol_mc1 = ifelse(newid == 458 & trigcat_mc1 == 2, 0,
+                                                   #ifelse(newid == 635 & trigcat_mc1 == 1, 0,
+                                                   #ifelse(newid == 675 & trigcat_mc1 == 1, 0,
+                                                   #ifelse(newid == 695 & trigcat_mc1 == 3, 1,
+                                                   #ifelse(newid == 809 & trigcat_mc1 == 2, 0, 
+                                                   #ifelse(newid == 812 & trigcat_mc1 == 3, 1,
+                                                   #chol_mc1)))))))
+
+# check that there are no more "don't know" responses for cholesterol
+#cham_add_var %>% group_by(chol_mc1) %>% count()
+
+# For those who don't know diabetes:
+# Make sure they had fasting blood taken and check gluccat_mc1 variable for diabetes information
+# Replace the don't knows with 1 if diabetes and 0 if no diabetes/pre-diabetes (if fasting)
+# if not fasting, check hba1c score 
+
+cham_tab1 %>% filter(diab_mc1 == 999)
+
+# check: among those who self report no diabetes, how many do not have a fasting blood
+# sugar score and have a hba1ccat_mc1 score that show diabetes
+cham_tab1 %>% filter(diab_mc1 == 0 & fast_bld_mc1 == 0 & hba1ccat_mc1 == 4)
+
+# check: among those who report no diabetes, how many do have a fasting blood sugar
+# and blood sugar is in diabetes category
+recat_diab <- cham_tab1 %>% filter(diab_mc1 == 0 & fast_bld_mc1 == 1 & gluccat_mc1 == 3)
+
+cham_tab1 <- cham_tab1 %>% mutate(diab_mc1 = ifelse(newid %in% c(recat_diab$newid), 1, 
+                                                          diab_mc1))
+
+cham_tab1 <- cham_tab1 %>% mutate(diab_mc1 = 
+                                        ifelse(newid == 222 & gluccat_mc1 == 2, 0, diab_mc1))
+
+cham_tab1 %>% group_by(diab_mc1) %>% count()
+
+cham_tab1 %>% filter(diab_mc1 == 0 & is.na(fast_bld_mc1))
+
+# 4 missing heart issues - can't adjust b/c other heart variables are from 18 year and show 
+# no heart issues - can't be sure they didn't develop heart issues between then and now 
+
+
+# For those who don't know cancer: 
+# Check cancer_m18y variable
+# Replace don't knows with 1 if ever had cancer 
+cham_tab1 %>% filter(cancer_mc1 == 999)
+
+cham_tab1 <- cham_tab1 %>% mutate(cancer_mc1 = 
+                                 ifelse(newid == 607 & cancer_m18y == 1, 1, cancer_mc1))
+
+cham_tab1 %>% group_by(cancer_mc1) %>% count()
+# 3 left over missing cancer info
+
+# 2 missing asthma - can't adjust b/c other asthma vars from 16y follow-up 
+# show no asthma - can't be sure they didn't get asthma between then and now
+
+# For those missing depression: 
+# Check depresscat_mc1, depresscat_m18y, and depresscat_m16y variables
+# Replace don't knows with values based on depression category from CESD or 
+# past depression categories
+# cham_add_var %>% filter(dep_mc1 == 999)
+
+# cham_add_var <- cham_add_var %>% mutate(dep_mc1 =
+                                 #ifelse(newid %in% c(194, 254, 467, 656) & 
+                                       # depresscat_mc1 == 1, 1,
+                                  #ifelse(newid %in% c(695, 726) &
+                                        # depresscat_m16y == 1, 1,
+                                  #ifelse(newid == 332 & depresscat_m16y == 0, 0,
+                                  #dep_mc1))))
+
+#cham_add_var %>% group_by(dep_mc1) %>% count()
+
+
+# 9 missing anxiety
+#cham_add_var %>% filter(anx_mc1 == 999) %>% dplyr::select(newid, gad4cat_mc1, gad7_4cat_m18y, 
+                                                   #gad7_4cat_m16y)
+
+#cham_add_var <- cham_add_var %>% mutate(anx_mc1 = 
+                                        #ifelse(newid %in% c(300, 332) &
+                                           #    gad4cat_mc1 == 0, 0, 
+                                       # ifelse(newid %in% c(60, 194, 254, 261, 695, 
+                                                            #726, 815), 1, anx_mc1)))
+# one person listed as NA but has gad4cat score of 2
+#cham_add_var <- cham_add_var %>% mutate(anx_mc1 = ifelse(newid == 498, 1, anx_mc1))
+
+#cham_add_var %>% group_by(anx_mc1) %>% count()
+
+
+# filter to only include mat cog participants to check distribution of self-rated health scores
+cham_tab1 <- cham_tab1 %>% filter(!is.na(age_qx_mc1))
+
+# calculate overall self-rated health score
+cham_tab1 <- cham_tab1 %>% mutate(summary_health = diab_mc1 + hbp_mc1 +
+                                          heart_mc1 + cancer_mc1 + 
+                                          asth_mc1 + thyr_mc1)
+
+
+# check distribution of scores
+cham_tab1 %>% group_by(summary_health) %>% count()
+
+
+# re-code overall self-rated doctor diagnosed health scores into categories
+# 0 - no major health issues
+# 1 - 1 health issue
+# 2-5: 2+ health issues
+# 999 - 1 don't know, rest no
+# 1000 = 1 yes, 1 dont know, rest no
+# 1001 = 2 yes, 1 dont know, rest no
+# 1002 = 3 yes, 1 dont know, rest no
+# 2000 = 2 yes, 2 don't know, rest no
+# NA - missing
+
+# Group by yeses:
+# No major health issues: 0
+# 1 health issue: 1, 1000
+# 2-5 health issues: 2-7, 1001, 1002, 2000
+# Missing: NA
+cham_tab1 <- cham_tab1 %>% mutate(summary_health_cat_yes = 
+                                 ifelse(summary_health == 0 | 
+                                        summary_health == 999, "no health issues", 
+                                 ifelse(summary_health == 1 |
+                                        summary_health == 1000, "1 health issue", 
+                                 ifelse(summary_health > 1 & summary_health <= 7| 
+                                        summary_health %in% c(1001, 1002, 2000), "2+",
+                                        NA))))
+
+# create alcohol variable 
+# 0 if haven't used alcohol since last visit or have had 0 drinks in the last 30 days; 1 otherwise
+cham_tab1 %>% group_by(alcslv_mc1) %>% count()
+cham_tab1 %>% group_by(alc30_mc1) %>% count()
+
+cham_tab1 <- cham_tab1 %>% mutate(alc = ifelse(is.na(alcslv_mc1), NA, 
+                                        ifelse(alcslv_mc1 == 0 | alc30_mc1 == 0, 0, 1)))
+                                    
+cham_tab1 %>% group_by(alc) %>% count()
+
+
+# menopause variables
+cham_tab1 %>% dplyr::select(menoind_mc1, menocat_mc1, agmeno_mc1)
+
+# menocat_mc1: 1 = premenopause, 2 = natural menopause, 3 = surg meno
+cham_tab1 <- cham_tab1 %>% mutate(menoind_mc1 = ifelse(menoind_mc1 == 0, 0, 1))
+
+# pregnancy since last visit variables 
+cham_tab1 <- cham_tab1 %>% mutate(live_preg_slv = ifelse(pregslv_mc1 == 1 & preg1out_mc1 == 1, 1, 0))
+
+
+# select relevant table 1 variables and outcomes for regression models
+cham_household <- cham_tab1 %>% dplyr::select(newid, cham, age_qx_mc1, ageusa_bl, yrsusa_matcog,
+                                    age_came_back_to_us, ageusa_cat, ageusa_18,
+                                    lang_exam_mc1, parent_educ,
+                                    educcat_mom, married,
+                                    work_mc1, workc_mc1, povcat_mc1, pov_binary, 
+                                    ficat_mc1,
+                                    hbp_bl, hbpage_bl, diab_bl, diabage_bl,
+                                    cancer_bl, cancerage_bl, dlvrydt, date_matcog,
+                                    qx_matcog,
+                                    memory_mc1, execfun_rc_mc1, verbal_rc_mc1,
+                                    global_rc_mc1, execfun_tbex_mc1,
+                                    global_tbex_mc1,
+                                    density1_mc1, density2_mc1,
+                                    ppb_mc1, ppb2_mc1, 
+                                    lvhome_n18_mc1, 
+                                    rooms_mc1, lvhome_n_mc1,
+                                    ppr_1, ppr_1_update, slpwkend_mc1, slpwkday_mc1, slpqual_mc1,
+                                    restless_sleep,
+                                    avg_sleep, less_6_hours,
+                                    napfq_mc1, gadscore_mc1, depress_mc1, 
+                                    depresscat_mc1, depress1_mc1, depress2_mc1, depress3_mc1, 
+                                    depress4_mc1, depress5_mc1, depress6_mc1, depress7_mc1, 
+                                    depress8_mc1, depress9_mc1, depress10_mc1,
+                                    gad4cat_mc1, gad1_mc1, gad2_mc1, gad3_mc1, gad4_mc1, 
+                                    gad5_mc1, gad6_mc1, gad7_mc1, 
+                                    marstat_bl, worksp_bl, workc_bl, 
+                                    povcat_bl, ipovcat_bl, ipovcat_bl_met,
+                                    summary_health_cat_yes, summary_health,
+                                    alcslv_mc1, alc30_mc1, alc,
+                                    menoind_mc1, menocat_mc1, agmeno_mc1, people_per_household, 
+                                    pregslv_mc1, pregslv_n_mc1, preg1out_mc1, preg1mult_mc1,
+                                    live_preg_slv, tmtb_fail_mc1)
+```
+
+
+## Make all variables numeric and calculate analytic sample
+```{r, analytic sample}
+# select relevant variables
+cham_household_analytic <- cham_household %>% dplyr::select(age_qx_mc1, ageusa_18, lang_exam_mc1, educcat_mom, 
+                                                       married, pov_binary, work_mc1, ppb2_mc1, 
+                                                       ppr_1, 
+                                                       lvhome_n18_mc1,
+                                                       depress_mc1, depresscat_mc1,
+                                                       gadscore_mc1, gad4cat_mc1,
+                                                       summary_health_cat_yes, menoind_mc1,
+                                                       alcslv_mc1, alc30_mc1, alc,
+                                                       avg_sleep, memory_mc1, execfun_rc_mc1, verbal_rc_mc1, 
+                                                       global_rc_mc1, density1_mc1, ppb2_mc1,
+                                                       ppb_mc1,
+                                                       slpwkday_mc1, slpwkend_mc1,
+                                                       restless_sleep,
+                                                       ppr_1_update, execfun_tbex_mc1, global_tbex_mc1)
+
+## calculate number of individuals missing covariates
+cham_household_analytic <- cham_household_analytic %>% filter(!is.na(ppb2_mc1) & !is.na(age_qx_mc1) & !is.na(ageusa_18) & 
+                              !is.na(lang_exam_mc1) & !is.na(educcat_mom) &
+                              !is.na(married) & !is.na(pov_binary) & !is.na(work_mc1) &
+                              !is.na(lvhome_n18_mc1) &
+                              !is.na(avg_sleep) & !is.na(depress_mc1) & !is.na(gadscore_mc1) & 
+                              !is.na(summary_health_cat_yes) & !is.na(menoind_mc1) & !is.na(alc)) 
+
+# calculate number of individuals missing neurocog outcomes                                                       
+cham_household_analytic %>% filter(!is.na(memory_mc1))   
+cham_household_analytic %>% filter(!is.na(global_rc_mc1))  
+```
+
+
+```{r, depression tmle by hand}
+### depression outcome
+cham_household_depress_mean <- cham_household_analytic %>% filter(!is.na(depress_mc1))
+cham_household_depress_mean <- cham_household_depress_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_depress_mean <- cham_household_depress_mean %>% dplyr::select(depress_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+ObsData <- cham_household_depress_mean
+ObsData <- ObsData %>% rename(Y = depress_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                                        #"SL.earth", 
+                                        #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                                        #"SL.earth", 
+                                        #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+      2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                 offset(qlogis(init.Pred)),
+               family = "binomial",
+               data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+                           ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                   ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                   ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+```
+
+
+```{r, depression tmle using lmtp package}
+### depression outcome
+cham_household_depress_mean <- cham_household_analytic %>% filter(!is.na(depress_mc1))
+cham_household_depress_mean <- cham_household_depress_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_depress_mean <- cham_household_depress_mean %>% dplyr::select(depress_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+
+d1 <- function(data, trt) {
+  rep(1, nrow(data))
+}
+
+d1(cham_household_depress_mean, "A")
+
+A <- "A"
+Y <- "depress_mc1"
+W <- c("age_qx_mc1", "ageusa_18", "lang_exam_mc1", "educcat_mom", "married", "pov_binary", "work_mc1", "lvhome_n18_mc1",
+       "menoind_mc1", "alc")
+
+
+
+treat <- lmtp_tmle(
+  data = cham_household_depress_mean, 
+  trt = "A", 
+  outcome = "depress_mc1", 
+  baseline = W, 
+  outcome_type = "continuous", 
+  shift = d1,
+  folds = 10, 
+  learners_trt = c("SL.glm", "SL.mean", "SL.glmnet", "SL.xgboost"),
+  learners_outcome = c("SL.glm", "SL.mean")
+)
+
+print(treat)
+
+#c("SL.mean", 
+                   #"SL.glm",
+                   #"SL.glmnet",
+                   #"SL.earth",
+                   #"SL.xgboost")
+```
+
+
+```{r, depression tmle by hand a different way}
+
+### depression outcome
+cham_household_depress_mean <- cham_household_analytic %>% filter(!is.na(depress_mc1))
+cham_household_depress_mean <- cham_household_depress_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_depress_mean <- cham_household_depress_mean %>% dplyr::select(depress_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+
+
+ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, 
+                family = binomial, data = cham_household_depress_mean)
+
+g_hat <- predict(ps_model, type = "response")  # Estimated propensity score
+
+
+q_model <- lm(depress_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = cham_household_depress_mean)
+Q_hat <- predict(q_model)  # Initial outcome model predictions
+
+
+
+H_AW <- (cham_household_depress_mean$A / g_hat) - ((1 - cham_household_depress_mean$A) / (1 - g_hat))
+
+
+
+epsilon_model <- glm(depress_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = cham_household_depress_mean)
+epsilon <- coef(epsilon_model)
+
+
+Q_star <- Q_hat + epsilon * H_AW
+
+
+data_A1 <- cham_household_depress_mean
+data_A1$A <- 1
+Q1_star <- predict(q_model, newdata = data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+
+data_A0 <- cham_household_depress_mean
+data_A0$A <- 0
+Q0_star <- predict(q_model, newdata = data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
+
+tmle_estimate <- mean(Q1_star - Q0_star)
+tmle_estimate
+
+
+
+# Influence function components
+IC <- H_AW * (cham_household_depress_mean$depress_mc1 - Q_star) + (Q1_star - Q0_star)
+
+# Standard Error (SE)
+SE <- sd(IC) / sqrt(nrow(cham_household_depress_mean))
+
+# 95% Confidence Interval
+lower_CI <- tmle_estimate - 1.96 * SE
+upper_CI <- tmle_estimate + 1.96 * SE
+
+# Print results
+cat("TMLE Estimate:", tmle_estimate, "\n")
+cat("95% CI: [", lower_CI, ",", upper_CI, "]\n")
+
+
+
+# Number of bootstrap samples
+B <- 500  
+tmle_bootstrap <- numeric(B)  
+
+
+# Bootstrap procedure
+set.seed(124)
+for (b in 1:B) {
+  boot_indices <- sample(1:nrow(cham_household_depress_mean), size = nrow(cham_household_depress_mean), replace = TRUE)  
+  boot_data <- cham_household_depress_mean[boot_indices, ] 
+  
+  # Re-estimate g (propensity score)
+  ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, family = binomial, data = boot_data)
+  g_hat <- predict(ps_model, type = "response")
+  
+  # Re-estimate Q (outcome regression)
+  q_model <- lm(depress_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = boot_data)
+  Q_hat <- predict(q_model)
+  
+  # Compute clever covariate
+  H_AW <- (boot_data$A / g_hat) - ((1 - boot_data$A) / (1 - g_hat))
+  
+  # Fit fluctuation model
+  epsilon_model <- glm(depress_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = boot_data)
+  epsilon <- coef(epsilon_model)
+  
+  # Update Q*
+  Q_star <- Q_hat + epsilon * H_AW
+  
+  # Compute counterfactual outcomes
+  boot_data_A1 <- boot_data
+  boot_data_A1$A <- 1
+  Q1_star <- predict(q_model, newdata = boot_data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+
+  boot_data_A0 <- boot_data
+  boot_data_A0$A <- 0
+  Q0_star <- predict(q_model, newdata = boot_data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
+
+  # Compute TMLE estimate for bootstrap sample
+  tmle_bootstrap[b] <- mean(Q1_star - Q0_star)
+}
+
+# Compute bootstrap confidence intervals
+CI_lower <- quantile(tmle_bootstrap, probs = 0.025)
+CI_upper <- quantile(tmle_bootstrap, probs = 0.975)
+
+cat("Bootstrap TMLE Estimate:", mean(tmle_bootstrap), "\n")
+cat("95% Bootstrap CI: [", CI_lower, ",", CI_upper, "]\n")
+```
+
+
+```{r, sleep tmle by hand}
+### sleep outcome
+cham_household_sleep_mean <- cham_household_analytic %>% filter(!is.na(avg_sleep))
+cham_household_sleep_mean <- cham_household_sleep_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_sleep_mean <- cham_household_sleep_mean %>% dplyr::select(avg_sleep, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+ObsData <- cham_household_sleep_mean
+ObsData <- ObsData %>% rename(Y = avg_sleep)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                                        #"SL.earth", 
+                                        #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                                        #"SL.earth", 
+                                        #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+      2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                 offset(qlogis(init.Pred)),
+               family = "binomial",
+               data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+                           ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                   ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                   ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+```
+
+
+```{r, sleep tmle using lmtp package}
+### sleep outcome
+cham_household_sleep_mean <- cham_household_analytic %>% filter(!is.na(avg_sleep))
+cham_household_sleep_mean <- cham_household_sleep_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_sleep_mean <- cham_household_sleep_mean %>% dplyr::select(avg_sleep, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+
+d1 <- function(data, trt) {
+  rep(1, nrow(data))
+}
+
+d1(cham_household_sleep_mean, "A")
+
+A <- "A"
+Y <- "avg_sleep"
+W <- c("age_qx_mc1", "ageusa_18", "lang_exam_mc1", "educcat_mom", "married", "pov_binary", "work_mc1", "lvhome_n18_mc1",
+       "menoind_mc1", "alc")
+
+
+treat <- lmtp_tmle(
+  data = cham_household_sleep_mean, 
+  trt = "A", 
+  outcome = "avg_sleep", 
+  baseline = W, 
+  outcome_type = "continuous", 
+  shift = d1,
+  folds = 10, 
+  learners_trt = c("SL.glm", "SL.mean"),
+  learners_outcome = c("SL.glm", "SL.mean")
+)
+
+print(treat)
+```
+
+
+```{r, sleep tmle another way by hand}
+### sleep outcome
+cham_household_sleep_mean <- cham_household_analytic %>% filter(!is.na(avg_sleep))
+cham_household_sleep_mean <- cham_household_sleep_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_sleep_mean <- cham_household_sleep_mean %>% dplyr::select(avg_sleep, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+
+
+ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, 
+                family = binomial, data = cham_household_sleep_mean)
+
+g_hat <- predict(ps_model, type = "response")  # Estimated propensity score
+
+
+q_model <- lm(avg_sleep ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+              pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = cham_household_sleep_mean)
+Q_hat <- predict(q_model)  # Initial outcome model predictions
+
+
+
+H_AW <- (cham_household_sleep_mean$A / g_hat) - ((1 - cham_household_sleep_mean$A) / (1 - g_hat))
+
+
+
+epsilon_model <- glm(avg_sleep ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = cham_household_sleep_mean)
+epsilon <- coef(epsilon_model)
+
+
+Q_star <- Q_hat + epsilon * H_AW
+
+
+data_A1 <- cham_household_sleep_mean
+data_A1$A <- 1
+Q1_star <- predict(q_model, newdata = data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+
+data_A0 <- cham_household_sleep_mean
+data_A0$A <- 0
+Q0_star <- predict(q_model, newdata = data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
+
+tmle_estimate <- mean(Q1_star - Q0_star)
+tmle_estimate
+
+
+
+# Influence function components
+IC <- H_AW * (cham_household_sleep_mean$avg_sleep - Q_star) + (Q1_star - Q0_star)
+
+# Standard Error (SE)
+SE <- sd(IC) / sqrt(nrow(cham_household_sleep_mean))
+
+# 95% Confidence Interval
+lower_CI <- tmle_estimate - 1.96 * SE
+upper_CI <- tmle_estimate + 1.96 * SE
+
+# Print results
+cat("TMLE Estimate:", tmle_estimate, "\n")
+cat("95% CI: [", lower_CI, ",", upper_CI, "]\n")
+
+
+
+# Number of bootstrap samples
+B <- 500  
+tmle_bootstrap <- numeric(B)  
+
+
+# Bootstrap procedure
+set.seed(124)
+for (b in 1:B) {
+  boot_indices <- sample(1:nrow(cham_household_sleep_mean), size = nrow(cham_household_sleep_mean), replace = TRUE)  
+  boot_data <- cham_household_sleep_mean[boot_indices, ] 
+  
+  # Re-estimate g (propensity score)
+  ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, family = binomial, data = boot_data)
+  g_hat <- predict(ps_model, type = "response")
+  
+  # Re-estimate Q (outcome regression)
+  q_model <- lm(avg_sleep ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = boot_data)
+  Q_hat <- predict(q_model)
+  
+  # Compute clever covariate
+  H_AW <- (boot_data$A / g_hat) - ((1 - boot_data$A) / (1 - g_hat))
+  
+  # Fit fluctuation model
+  epsilon_model <- glm(avg_sleep ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = boot_data)
+  epsilon <- coef(epsilon_model)
+  
+  # Update Q*
+  Q_star <- Q_hat + epsilon * H_AW
+  
+  # Compute counterfactual outcomes
+  boot_data_A1 <- boot_data
+  boot_data_A1$A <- 1
+  Q1_star <- predict(q_model, newdata = boot_data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+
+  boot_data_A0 <- boot_data
+  boot_data_A0$A <- 0
+  Q0_star <- predict(q_model, newdata = boot_data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
+
+  # Compute TMLE estimate for bootstrap sample
+  tmle_bootstrap[b] <- mean(Q1_star - Q0_star)
+}
+
+# Compute bootstrap confidence intervals
+CI_lower <- quantile(tmle_bootstrap, probs = 0.025)
+CI_upper <- quantile(tmle_bootstrap, probs = 0.975)
+
+cat("Bootstrap TMLE Estimate:", mean(tmle_bootstrap), "\n")
+cat("95% Bootstrap CI: [", CI_lower, ",", CI_upper, "]\n")
+```
+
+
+```{r, memory tmle by hand}
+### memory outcome
+cham_household_mem_mean <- cham_household_analytic %>% filter(!is.na(memory_mc1))
+cham_household_mem_mean <- cham_household_mem_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1)))
+
+## make ppb2_mc1 variable numeric
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_mem_mean <- cham_household_mem_mean %>% dplyr::select(memory_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1)
+ObsData <- cham_household_mem_mean
+ObsData <- ObsData %>% rename(Y = memory_mc1)
+
+# transform continuous outcome to be within range of [0, 1]
+min.Y <- min(ObsData$Y)
+max.Y <- max(ObsData$Y)
+ObsData$Y.bounded <- (ObsData$Y - min.Y)/(max.Y - min.Y)
+summary(ObsData$Y.bounded)
+
+# initial G-comp estimate
+set.seed(124)
+ObsData.noY <- dplyr::select(ObsData, !c(Y, Y.bounded))
+Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded, 
+                         X = ObsData.noY,
+                         cvControl = list(V = 10L),
+                         SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                                        #"SL.earth", 
+                                        #"SL.ranger"), 
+                         method = "method.CC_nloglik", 
+                         family = "gaussian")
+
+# get initial predictions
+ObsData$init.Pred <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+summary(ObsData$init.Pred)
+
+# get predictions under treatment A = 1
+ObsData.noY$A <- 1
+ObsData$Pred.Y1 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+summary(ObsData$Pred.Y1)
+
+# get predictions under treatment A = 0
+ObsData.noY$A <- 0
+ObsData$Pred.Y0 <- predict(Y.fit.sl, newdata = ObsData.noY, 
+                           type = "response")$pred
+
+# get initial treatment effect estimate
+ObsData$Pred.TE <- ObsData$Pred.Y1 - ObsData$Pred.Y0
+summary(ObsData$Pred.TE)
+
+# perform targeted improvement - propensity score model
+set.seed(124)
+ObsData.noYA <- dplyr::select(ObsData, !c(Y, Y.bounded, A, init.Pred,
+                                          Pred.Y1, Pred.Y0, Pred.TE))
+
+PS.fit.SL <- SuperLearner(Y = ObsData$A, 
+                          X = ObsData.noYA, 
+                          cvControl = list(V = 10L), 
+                          SL.library = c("SL.mean", 
+                                        "SL.glm",
+                                        "SL.glmnet",
+                                        "SL.earth",
+                                        "SL.xgboost"), 
+                                        #"SL.earth", 
+                                        #"SL.ranger"),
+                          method = "method.CC_nloglik", 
+                          family = "binomial")
+
+# get propensity score predictions
+all.pred <- predict(PS.fit.SL, type = "response")
+
+ObsData$PS.SL <- all.pred$pred
+summary(ObsData$PS.SL)
+
+tapply(ObsData$PS.SL, ObsData$A, summary)
+
+
+# plot propensities
+plot(density(ObsData$PS.SL[ObsData$A==0]), 
+     col = "red", main = "")
+lines(density(ObsData$PS.SL[ObsData$A==1]), 
+      col = "blue", lty = 2)
+legend("topright", c("<=2 PPBR",">2 PPBR"), 
+       col = c("red", "blue"), lty=1:2)
+
+# Estiamte H
+ObsData$H.A1L <- (ObsData$A) / ObsData$PS.SL 
+ObsData$H.A0L <- (1-ObsData$A) / (1- ObsData$PS.SL)
+ObsData$H.AL <- ObsData$H.A1L - ObsData$H.A0L
+summary(ObsData$H.AL)
+
+tapply(ObsData$H.AL, ObsData$A, summary)
+
+t(apply(cbind(-ObsData$H.A0L,ObsData$H.A1L), 
+      2, summary)) 
+
+# estimate epsilon
+eps_mod <- glm(Y.bounded ~ -1 + H.A1L + H.A0L +  
+                 offset(qlogis(init.Pred)), 
+               family = "binomial",
+               data = ObsData)
+epsilon <- coef(eps_mod)  
+epsilon["H.A1L"]
+epsilon["H.A0L"]
+
+eps_mod1 <- glm(Y.bounded ~ -1 + H.AL +
+                 offset(qlogis(init.Pred)),
+               family = "binomial",
+               data = ObsData)
+epsilon1 <- coef(eps_mod1) 
+epsilon1 
+
+ObsData$Pred.Y1.update <- plogis(qlogis(ObsData$Pred.Y1) +  
+                                   epsilon["H.A1L"]*ObsData$H.A1L)
+ObsData$Pred.Y0.update <- plogis(qlogis(ObsData$Pred.Y0) + 
+                                   epsilon["H.A0L"]*ObsData$H.A0L)
+summary(ObsData$Pred.Y1.update)
+
+summary(ObsData$Pred.Y0.update)  
+
+# effect estimate
+ATE.TMLE.bounded.vector <- ObsData$Pred.Y1.update -  
+                           ObsData$Pred.Y0.update
+summary(ATE.TMLE.bounded.vector) 
+
+ATE.TMLE.bounded <- mean(ATE.TMLE.bounded.vector, 
+                         na.rm = TRUE) 
+ATE.TMLE.bounded 
+
+# rescale effect estimate
+ATE.TMLE <- (max.Y-min.Y)*ATE.TMLE.bounded   
+ATE.TMLE 
+
+# confidence interval estimation
+ci.estimate <- function(data = ObsData, H.AL.components = 1){
+  min.Y <- min(data$Y)
+  max.Y <- max(data$Y)
+  # transform predicted outcomes back to original scale
+  if (H.AL.components == 2){
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update + min.Y
+  } 
+  if (H.AL.components == 1) {
+    data$Pred.Y1.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y1.update1 + min.Y
+    data$Pred.Y0.update.rescaled <- 
+      (max.Y- min.Y)*data$Pred.Y0.update1 + min.Y
+  }
+  EY1_TMLE1 <- mean(data$Pred.Y1.update.rescaled, 
+                    na.rm = TRUE)
+  EY0_TMLE1 <- mean(data$Pred.Y0.update.rescaled, 
+                    na.rm = TRUE)
+  # ATE efficient influence curve
+  D1 <- data$A/data$PS.SL*
+    (data$Y - data$Pred.Y1.update.rescaled) + 
+    data$Pred.Y1.update.rescaled - EY1_TMLE1
+  D0 <- (1 - data$A)/(1 - data$PS.SL)*
+    (data$Y - data$Pred.Y0.update.rescaled) + 
+    data$Pred.Y0.update.rescaled - EY0_TMLE1
+  EIC <- D1 - D0
+  # ATE variance
+  n <- nrow(data)
+  varHat.IC <- var(EIC, na.rm = TRUE)/n
+  # ATE 95% CI
+  if (H.AL.components == 2) {
+    ATE.TMLE.CI <- c(ATE.TMLE - 1.96*sqrt(varHat.IC), 
+                   ATE.TMLE + 1.96*sqrt(varHat.IC))
+  }
+  if (H.AL.components == 1) {
+    ATE.TMLE.CI <- c(ATE.TMLE1 - 1.96*sqrt(varHat.IC), 
+                   ATE.TMLE1 + 1.96*sqrt(varHat.IC))
+  }
+  return(ATE.TMLE.CI) 
+}
+
+CI2 <- ci.estimate(data = ObsData, H.AL.components = 2) 
+CI2
+```
+
+
+```{r, memory outcome using lmtp package}
+### memory outcome
+cham_household_memory_mean <- cham_household_analytic %>% filter(!is.na(memory_mc1))
+cham_household_memory_mean <- cham_household_memory_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_memory_mean <- cham_household_memory_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_memory_mean <- cham_household_memory_mean %>% dplyr::select(memory_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+
+d1 <- function(data, trt) {
+  rep(1, nrow(data))
+}
+
+d1(cham_household_sleep_mean, "A")
+
+A <- "A"
+Y <- "memory_mc1"
+W <- c("age_qx_mc1", "ageusa_18", "lang_exam_mc1", "educcat_mom", "married", "pov_binary", "work_mc1", "lvhome_n18_mc1",
+       "menoind_mc1", "alc")
+
+set.seed(124)
+treat <- lmtp_tmle(
+  data = cham_household_memory_mean, 
+  trt = "A", 
+  outcome = "memory_mc1", 
+  baseline = W, 
+  outcome_type = "continuous", 
+  shift = d1,
+  folds = 10, 
+  learners_trt = c("SL.glm", "SL.mean"),
+  learners_outcome = c("SL.glm", "SL.mean")
+)
+
+print(treat)
+```
+
+
+```{r, memory tmle another way by hand}
+### sleep outcome
+cham_household_mem_mean <- cham_household_analytic %>% filter(!is.na(memory_mc1))
+cham_household_mem_mean <- cham_household_mem_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
+                                                                is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
+                                                                is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
+
+## make ppb2_mc1 variable numeric
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+
+cham_household_mem_mean <- cham_household_mem_mean %>% dplyr::select(memory_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
+                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
+                                                                     menoind_mc1, alc)
+
+
+ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, 
+                family = binomial, data = cham_household_mem_mean)
+
+g_hat <- predict(ps_model, type = "response")  # Estimated propensity score
+
+
+q_model <- lm(memory_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+              pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = cham_household_mem_mean)
+Q_hat <- predict(q_model)  # Initial outcome model predictions
+
+
+
+H_AW <- (cham_household_mem_mean$A / g_hat) - ((1 - cham_household_mem_mean$A) / (1 - g_hat))
+
+
+
+epsilon_model <- glm(memory_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = cham_household_mem_mean)
+epsilon <- coef(epsilon_model)
+
+
+Q_star <- Q_hat + epsilon * H_AW
+
+
+data_A1 <- cham_household_mem_mean
+data_A1$A <- 1
+Q1_star <- predict(q_model, newdata = data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+
+data_A0 <- cham_household_mem_mean
+data_A0$A <- 0
+Q0_star <- predict(q_model, newdata = data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
+
+tmle_estimate <- mean(Q1_star - Q0_star)
+tmle_estimate
+
+
+
+# Influence function components
+IC <- H_AW * (cham_household_mem_mean$memory_mc1 - Q_star) + (Q1_star - Q0_star)
+
+# Standard Error (SE)
+SE <- sd(IC) / sqrt(nrow(cham_household_mem_mean))
+
+# 95% Confidence Interval
+lower_CI <- tmle_estimate - 1.96 * SE
+upper_CI <- tmle_estimate + 1.96 * SE
+
+# Print results
+cat("TMLE Estimate:", tmle_estimate, "\n")
+cat("95% CI: [", lower_CI, ",", upper_CI, "]\n")
+
+
+
+# Number of bootstrap samples
+B <- 500  
+tmle_bootstrap <- numeric(B)  
+
+
+# Bootstrap procedure
+set.seed(124)
+for (b in 1:B) {
+  boot_indices <- sample(1:nrow(cham_household_mem_mean), size = nrow(cham_household_mem_mean), replace = TRUE)  
+  boot_data <- cham_household_mem_mean[boot_indices, ] 
+  
+  # Re-estimate g (propensity score)
+  ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, family = binomial, data = boot_data)
+  g_hat <- predict(ps_model, type = "response")
+  
+  # Re-estimate Q (outcome regression)
+  q_model <- lm(memory_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
+                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = boot_data)
+  Q_hat <- predict(q_model)
+  
+  # Compute clever covariate
+  H_AW <- (boot_data$A / g_hat) - ((1 - boot_data$A) / (1 - g_hat))
+  
+  # Fit fluctuation model
+  epsilon_model <- glm(memory_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = boot_data)
+  epsilon <- coef(epsilon_model)
+  
+  # Update Q*
+  Q_star <- Q_hat + epsilon * H_AW
+  
+  # Compute counterfactual outcomes
+  boot_data_A1 <- boot_data
+  boot_data_A1$A <- 1
+  Q1_star <- predict(q_model, newdata = boot_data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+
+  boot_data_A0 <- boot_data
+  boot_data_A0$A <- 0
+  Q0_star <- predict(q_model, newdata = boot_data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
+
+  # Compute TMLE estimate for bootstrap sample
+  tmle_bootstrap[b] <- mean(Q1_star - Q0_star)
+}
+
+# Compute bootstrap confidence intervals
+CI_lower <- quantile(tmle_bootstrap, probs = 0.025)
+CI_upper <- quantile(tmle_bootstrap, probs = 0.975)
+
+cat("Bootstrap TMLE Estimate:", mean(tmle_bootstrap), "\n")
+cat("95% Bootstrap CI: [", CI_lower, ",", CI_upper, "]\n")
+```
+
+
+## Make all variables numeric and calculate analytic sample
+```{r, make all variables numeric}
+# make people per bedroom numeric 
+cham_household <- cham_household %>% mutate(ppb2_num = ifelse(ppb2_mc1 == "<=2", 0, 
+                                                       ifelse(ppb2_mc1 == ">2", 1, NA)))
+cham_household %>% group_by(ppb2_num) %>% count()
+
+# make people per room numeric 
+cham_household <- cham_household %>% mutate(ppr1_num = ifelse(ppr_1 == "<=1", 0, 
+                                                       ifelse(ppr_1 == ">1", 1, NA)))
+
+cham_household %>% group_by(ppr1_num) %>% count()
+
+
+cham_household <- cham_household %>% mutate(sleep_sq = avg_sleep^2)
+# select relevant variables
+cham_household_med <- cham_household %>% dplyr::select(age_qx_mc1, ageusa_18, lang_exam_mc1, educcat_mom, 
+                                                       married, pov_binary, work_mc1, ppb2_num, 
+                                                       ppr1_num, lvhome_n18_mc1,
+                                                       depress_mc1, depresscat_mc1,
+                                                       gadscore_mc1, gad4cat_mc1,
+                                                       summary_health_cat_yes, menoind_mc1,
+                                                       alcslv_mc1, alc30_mc1, alc,
+                                                       avg_sleep, sleep_sq, memory_mc1, execfun_rc_mc1, verbal_rc_mc1, 
+                                                       global_rc_mc1, density1_mc1, ppb2_mc1,
+                                                       ppb_mc1,
+                                                       ppr_1_update, execfun_tbex_mc1, global_tbex_mc1)
+
+cham_household_med <- cham_household_med %>% mutate(ageusa18_cat_num = ifelse(ageusa_18 == "0", 0, 
+                                                                     ifelse(ageusa_18 == "<18", 1, 2)))
+
+cham_household_med <- cham_household_med %>% mutate(lang_exam_mc1_num = ifelse(lang_exam_mc1 == "English", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(educcat_num = ifelse(educcat_mom == "<=6th grade", 0, 
+                                                                  ifelse(educcat_mom == "7-11th grade", 1, 2)))
+
+cham_household_med <- cham_household_med %>% mutate(married_num = ifelse(married == "not married", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(pov_num = ifelse(pov_binary == "At or below poverty", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(work_num = ifelse(work_mc1 == "Did not work since last visit", 0, 1))
+
+cham_household_med <- cham_household_med %>% mutate(summary_health_num = 
+                                                      ifelse(summary_health_cat_yes == "no health issues", 0, 
+                                                      ifelse(summary_health_cat_yes == "1 health issue", 1, 2)))
+
+cham_household_med <- cham_household_med %>% mutate(ppr_1_update = ifelse(ppr_1_update == "<=1", 0, 1))
+
+# create numeric variable for depression
+cham_household_med <- cham_household_med %>% mutate(depresscat_mc1 = ifelse(depresscat_mc1 == 0, 0, 1))
+
+# create binary variable for anxiety (minimal/mild anxiety vs. moderate/severe anxiety)
+cham_household_med <- cham_household_med %>% mutate(anx_bin = ifelse(gad4cat_mc1 == 0 | gad4cat_mc1 == 1, 0, 1))
+
+#cham_household_med <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa_18, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                           #educcat_num, married_num, pov_num, work_num,
+                                                           #ppb2_num, ppr1_num, lvhome_n18_mc1,
+                                                           #depress_mc1, depresscat_mc1,
+                                                           #gadscore_mc1, gad4cat_mc1, anx_bin,
+                                                           #summary_health_num, menoind_mc1, 
+                                                           #alc, avg_sleep, memory_mc1, execfun_rc_mc1,
+                                                           #verbal_rc_mc1, global_rc_mc1)
+
+
+## calculate number of individuals missing covariates
+cham_household_med <- cham_household_med %>% filter(!is.na(ppb2_num) & !is.na(age_qx_mc1) & !is.na(ageusa18_cat_num) & 
+                              !is.na(lang_exam_mc1_num) & !is.na(educcat_num) &
+                              !is.na(married_num) & !is.na(pov_num) & !is.na(work_num) &
+                              !is.na(lvhome_n18_mc1) &
+                              !is.na(avg_sleep) & !is.na(depress_mc1) & !is.na(gadscore_mc1) & 
+                              !is.na(summary_health_num) & !is.na(menoind_mc1) & !is.na(alc)) 
+cham_household_med
+# calculate number of individuals missing neurocog outcomes                                                       
+cham_household_med %>% filter(!is.na(memory_mc1))   
+cham_household_med %>% filter(!is.na(global_rc_mc1))  
+```
+
+
+```{r}
+### memory outcome
+cham_household_med_mem <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                               educcat_num, married_num, pov_num, work_num,
+                                                               lvhome_n18_mc1,
+                                                               ppb2_num, depress_mc1, gadscore_mc1,
+                                                               summary_health_num, menoind_mc1, 
+                                                               alc, avg_sleep, memory_mc1) %>% 
+                                                        rename(A = ppb2_num, 
+                                                               W1 = age_qx_mc1, 
+                                                               W2 = ageusa18_cat_num, 
+                                                               W3 = lang_exam_mc1_num, 
+                                                               W4 = educcat_num, 
+                                                               W5 = married_num, 
+                                                               W6 = pov_num, 
+                                                               W7 = work_num, 
+                                                               W8 = lvhome_n18_mc1,
+                                                               W9 = menoind_mc1,
+                                                               W10 = alc,
+                                                               M = avg_sleep,
+                                                               Y = memory_mc1, 
+                                                               Z1 = depress_mc1, 
+                                                               Z2 = gadscore_mc1, 
+                                                               Z3 = summary_health_num) %>% drop_na()
+
+cham_household_med_mem <- as.data.frame(cham_household_med_mem)
+
+
+
+set.seed(124)
+## memory outcome
+#cham_household_med_mem$A <- as.numeric(cham_household_med_mem$A)
+
+data(cham_household_med_mem, package = "mma")
+crumble_memory <- crumble(
+    data = cham_household_med_mem,
+    trt = "A", 
+    outcome = "Y",
+    covar = c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10"),
+    mediators = c("M"),
+    #moc = c("Z1", "Z2", "Z3", "Z4", "Z5"),
+    moc = NULL, # for natural effects
+    d0 = \(data, trt) rep(0, nrow(data)), 
+    d1 = \(data, trt) rep(1, nrow(data)), 
+    #effect = "RT",
+    effect = "N",
+    learners = c("mean", "glm"),#, "glmnet", "earth", "xgboost"), 
+    nn_module = sequential_module(),
+    control = crumble_control(crossfit_folds = 1L, epochs = 10L)
+)
+crumble_memory
+```
+
+```{r, mediation using medoutcon}
+library(sl3)
+library(data.table)
+# instantiate learners
+mean_lrnr <- Lrnr_mean$new()
+fglm_lrnr <- Lrnr_glm_fast$new(family = binomial())
+lasso_lrnr <- Lrnr_glmnet$new(alpha = 1, family = "binomial", nfolds = 3)
+enet_lrnr <- Lrnr_glmnet$new(alpha = 0.5, family = "binomial", nfolds = 3)
+rf_lrnr <- Lrnr_ranger$new(num.trees = 200)
+
+# for HAL, use linear probability formulation, with bounding in unit interval
+hal_gaussian_lrnr <- Lrnr_hal9001$new(
+  family = "gaussian",
+  fit_control = list(
+    max_degree = 3,
+    n_folds = 3,
+    use_min = TRUE,
+    type.measure = "mse"
+  )
+)
+bound_lrnr <- Lrnr_bound$new(bound = 1e-6)
+hal_bounded_lrnr <- Pipeline$new(hal_gaussian_lrnr, bound_lrnr)
+
+# create learner library and instantiate super learner ensemble
+lrnr_lib <- Stack$new(
+  mean_lrnr, fglm_lrnr, enet_lrnr, lasso_lrnr,
+  rf_lrnr, hal_bounded_lrnr
+)
+sl_lrnr <- Lrnr_sl$new(learners = lrnr_lib, metalearner = Lrnr_nnls$new())
+
+make_example_data <- function(n_obs = 1000) {
+  ## baseline covariates
+  w_1 <- rbinom(n_obs, 1, prob = 0.6)
+  w_2 <- rbinom(n_obs, 1, prob = 0.3)
+  w_3 <- rbinom(n_obs, 1, prob = pmin(0.2 + (w_1 + w_2) / 3, 1))
+  w <- cbind(w_1, w_2, w_3)
+  w_names <- paste("W", seq_len(ncol(w)), sep = "_")
+
+  ## exposure
+  a <- as.numeric(rbinom(n_obs, 1, plogis(rowSums(w) - 2)))
+
+  ## mediator-outcome confounder affected by treatment
+  z <- rbinom(n_obs, 1, plogis(rowMeans(-log(2) + w - a) + 0.2))
+
+  ## mediator -- could be multivariate
+  m <- rbinom(n_obs, 1, plogis(rowSums(log(3) * w[, -3] + a - z)))
+  m_names <- "M"
+
+  ## outcome
+  y <- rbinom(n_obs, 1, plogis(1 / (rowSums(w) - z + a + m)))
+
+  ## construct output
+  dat <- as.data.table(cbind(w = w, a = a, z = z, m = m, y = y))
+  setnames(dat, c(w_names, "A", "Z", m_names, "Y"))
+  return(dat)
+}
+
+example_data <- make_example_data(1000)
+w_names <- stringr::str_subset(colnames(example_data), "W")
+m_names <- stringr::str_subset(colnames(example_data), "M")
+
+
+cham_household_med_mem <- cham_household_med_mem %>% dplyr::select(-Z1, -Z2, -Z3) %>% rename(Z1 = W9, 
+                                                            Z2 = W10)
+
+w_names <- stringr::str_subset(colnames(cham_household_med_mem), "W")
+z_names <- stringr::str_subset(colnames(cham_household_med_mem), "Z")
+
+
+de <- medoutcon(
+  W = cham_household_med_mem[, ..w_names],
+  A = cham_household_med_mem$A,
+  Z = cham_household_med_mem[, ..z_names],
+  M = cham_household_med_mem$M,
+  Y = cham_household_med_mem$Y,
+  g_learners = sl_lrnr,
+  h_learners = sl_lrnr,
+  b_learners = sl_lrnr,
+  q_learners = sl_lrnr,
+  r_learners = sl_lrnr,
+  effect = "direct",
+  estimator = "tmle",
+  estimator_args = list(cv_folds = 2, max_iter = 5)
+)
+summary(de)
+
+
+
+
+os_de <- medoutcon(
+  W = example_data[, ..w_names],
+  A = example_data$A,
+  Z = example_data$Z,
+  M = example_data[, ..m_names],
+  Y = example_data$Y,
+  g_learners = sl_lrnr,
+  h_learners = sl_lrnr,
+  b_learners = sl_lrnr,
+  q_learners = sl_lrnr,
+  r_learners = sl_lrnr,
+  effect = "direct",
+  estimator = "onestep",
+  estimator_args = list(cv_folds = 2)
+)
+summary(os_de)
+```
+
