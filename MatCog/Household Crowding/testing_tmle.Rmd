@@ -42,6 +42,12 @@ library(viridis)
 library(xgboost)
 library(psych)
 library(corrr)
+library(tmle3)
+library(sl3)
+library(Rsolnp)
+library(data.table)
+library(mediation)
+library(stringr)
 set.seed(124)
 ```
 
@@ -88,7 +94,7 @@ cham %>% filter(abs(ageusa_bl - age_came_back_to_us) > 2) %>%
   dplyr::select(newid, age_qx_mc1, yrsusa_matcog, ageusa_bl, age_came_back_to_us, country_mom)
 
 # check distribution of age came to the US variable
-ggplot(data = cham, aes(x = ageusa_bl)) + 
+ggplot2::ggplot(data = cham, aes(x = ageusa_bl)) + 
   geom_histogram()
 
 cham %>% filter(is.na(ageusa_bl)) %>% dplyr::select(newid, ageusa_bl, age_came_back_to_us,
@@ -553,10 +559,10 @@ Y.fit.sl <- SuperLearner(Y = ObsData$Y.bounded,
                          X = ObsData.noY,
                          cvControl = list(V = 10L),
                          SL.library = c("SL.mean", 
-                                        "SL.glm",
-                                        "SL.glmnet",
-                                        "SL.earth",
-                                        "SL.xgboost"), 
+                                        "SL.glm"),
+                                        #"SL.glmnet",
+                                        #"SL.earth",
+                                        #"SL.xgboost"), 
                                         #"SL.earth", 
                                         #"SL.ranger"), 
                          method = "method.CC_nloglik", 
@@ -592,10 +598,10 @@ PS.fit.SL <- SuperLearner(Y = ObsData$A,
                           X = ObsData.noYA, 
                           cvControl = list(V = 10L), 
                           SL.library = c("SL.mean", 
-                                        "SL.glm",
-                                        "SL.glmnet",
-                                        "SL.earth",
-                                        "SL.xgboost"), 
+                                        "SL.glm"),
+                                        #"SL.glmnet",
+                                        #"SL.earth",
+                                        #"SL.xgboost"), 
                                         #"SL.earth", 
                                         #"SL.ranger"),
                           method = "method.CC_nloglik", 
@@ -750,8 +756,8 @@ treat <- lmtp_tmle(
   outcome_type = "continuous", 
   shift = d1,
   folds = 10, 
-  learners_trt = c("SL.glm", "SL.mean", "SL.glmnet", "SL.xgboost"),
-  learners_outcome = c("SL.glm", "SL.mean")
+  learners_trt = c("SL.glm"),
+  learners_outcome = c("SL.glm")
 )
 
 print(treat)
@@ -761,128 +767,115 @@ print(treat)
                    #"SL.glmnet",
                    #"SL.earth",
                    #"SL.xgboost")
+
 ```
 
 
-```{r, depression tmle by hand a different way}
-
-### depression outcome
+```{r, depression tmle using tmle3 package}
+# get rid of observations missing exposure, outcome, covars
 cham_household_depress_mean <- cham_household_analytic %>% filter(!is.na(depress_mc1))
 cham_household_depress_mean <- cham_household_depress_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
                                                                 is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
                                                                 is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
 
-## make ppb2_mc1 variable numeric
-cham_household_depress_mean <- cham_household_depress_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+# make variables factor vars
+cham_household_depress_mean$ppb2_mc1 <- as.factor(cham_household_depress_mean$ppb2_mc1)
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(ageusa18_cat_num = ifelse(ageusa_18 == "0", 0, 
+                                                                     ifelse(ageusa_18 == "<18", 1, 2)))
 
-cham_household_depress_mean <- cham_household_depress_mean %>% dplyr::select(depress_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
-                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
-                                                                     menoind_mc1, alc)
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(lang_exam_mc1_num = ifelse(lang_exam_mc1 == "English", 0, 1))
 
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(educcat_num = ifelse(educcat_mom == "<=6th grade", 0, 
+                                                                  ifelse(educcat_mom == "7-11th grade", 1, 2)))
 
-ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, 
-                family = binomial, data = cham_household_depress_mean)
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(married_num = ifelse(married == "not married", 0, 1))
 
-g_hat <- predict(ps_model, type = "response")  # Estimated propensity score
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(pov_num = ifelse(pov_binary == "At or below poverty", 0, 1))
 
+cham_household_depress_mean <- cham_household_depress_mean %>% mutate(work_num = ifelse(work_mc1 == "Did not work since last visit", 0, 1))
 
-q_model <- lm(depress_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = cham_household_depress_mean)
-Q_hat <- predict(q_model)  # Initial outcome model predictions
+cham_household_depress_mean$menoind_mc1 <- as.factor(cham_household_depress_mean$menoind_mc1)
 
+cham_household_depress_mean$alc <- as.factor(cham_household_depress_mean$alc)
 
+# create node list
+node_list <- list(A = "ppb2_mc1",
+                  Y = "depress_mc1",
+                  W = c("age_qx_mc1", "ageusa18_cat_num", "lang_exam_mc1_num", "educcat_num", "married_num", "pov_num", "work_num", "lvhome_n18_mc1",
+       "menoind_mc1", "alc"))
 
-H_AW <- (cham_household_depress_mean$A / g_hat) - ((1 - cham_household_depress_mean$A) / (1 - g_hat))
+# process any missings
+processed <- process_missing(cham_household_depress_mean, node_list)
+cham_household_depress_mean <- processed$data
+node_list <- processed$node_list
 
-
-
-epsilon_model <- glm(depress_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = cham_household_depress_mean)
-epsilon <- coef(epsilon_model)
-
-
-Q_star <- Q_hat + epsilon * H_AW
-
-
-data_A1 <- cham_household_depress_mean
-data_A1$A <- 1
-Q1_star <- predict(q_model, newdata = data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
-
-data_A0 <- cham_household_depress_mean
-data_A0$A <- 0
-Q0_star <- predict(q_model, newdata = data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
-
-tmle_estimate <- mean(Q1_star - Q0_star)
-tmle_estimate
+# create a spec object
+ate_spec <- tmle_ATE(treatment_level = ">2",
+                     control_level = "<=2")
 
 
+# Check learners by data type
+sl3_list_learners(properties = "binomial");
+sl3_list_learners(properties = "continuous")
 
-# Influence function components
-IC <- H_AW * (cham_household_depress_mean$depress_mc1 - Q_star) + (Q1_star - Q0_star)
+# choose base learners
+lrnr_mean <- make_learner(Lrnr_mean)
+lrnr_glm <- make_learner(Lrnr_glm)
+lrnr_glmnet <- make_learner(Lrnr_glmnet)
+lrnr_earth <- make_learner(Lrnr_earth)
+lrnr_xgboost <- make_learner(Lrnr_xgboost)
 
-# Standard Error (SE)
-SE <- sd(IC) / sqrt(nrow(cham_household_depress_mean))
-
-# 95% Confidence Interval
-lower_CI <- tmle_estimate - 1.96 * SE
-upper_CI <- tmle_estimate + 1.96 * SE
-
-# Print results
-cat("TMLE Estimate:", tmle_estimate, "\n")
-cat("95% CI: [", lower_CI, ",", upper_CI, "]\n")
-
-
-
-# Number of bootstrap samples
-B <- 500  
-tmle_bootstrap <- numeric(B)  
+# define metalearners appropriate to data types
+ls_metalearner <- make_learner(Lrnr_nnls)
+mn_metalearner <- make_learner(Lrnr_solnp)
 
 
-# Bootstrap procedure
-set.seed(124)
-for (b in 1:B) {
-  boot_indices <- sample(1:nrow(cham_household_depress_mean), size = nrow(cham_household_depress_mean), replace = TRUE)  
-  boot_data <- cham_household_depress_mean[boot_indices, ] 
-  
-  # Re-estimate g (propensity score)
-  ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, family = binomial, data = boot_data)
-  g_hat <- predict(ps_model, type = "response")
-  
-  # Re-estimate Q (outcome regression)
-  q_model <- lm(depress_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = boot_data)
-  Q_hat <- predict(q_model)
-  
-  # Compute clever covariate
-  H_AW <- (boot_data$A / g_hat) - ((1 - boot_data$A) / (1 - g_hat))
-  
-  # Fit fluctuation model
-  epsilon_model <- glm(depress_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = boot_data)
-  epsilon <- coef(epsilon_model)
-  
-  # Update Q*
-  Q_star <- Q_hat + epsilon * H_AW
-  
-  # Compute counterfactual outcomes
-  boot_data_A1 <- boot_data
-  boot_data_A1$A <- 1
-  Q1_star <- predict(q_model, newdata = boot_data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+sl_Y <- Lrnr_sl$new(
+  learners = list(lrnr_mean, lrnr_glm))
+  #metalearner = ls_metalearner)
 
-  boot_data_A0 <- boot_data
-  boot_data_A0$A <- 0
-  Q0_star <- predict(q_model, newdata = boot_data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
 
-  # Compute TMLE estimate for bootstrap sample
-  tmle_bootstrap[b] <- mean(Q1_star - Q0_star)
-}
+sl_A <- Lrnr_sl$new(
+  learners = list(lrnr_mean, lrnr_glm))
+  #metalearner = mn_metalearner)
 
-# Compute bootstrap confidence intervals
-CI_lower <- quantile(tmle_bootstrap, probs = 0.025)
-CI_upper <- quantile(tmle_bootstrap, probs = 0.975)
 
-cat("Bootstrap TMLE Estimate:", mean(tmle_bootstrap), "\n")
-cat("95% Bootstrap CI: [", CI_lower, ",", CI_upper, "]\n")
+learner_list <- list(A = sl_A, Y = sl_Y)
+
+tmle_fit <- tmle3(ate_spec, cham_household_depress_mean, node_list, learner_list)
+print(tmle_fit)
+
+estimates <- tmle_fit$summary$psi_transformed
+print(estimates)
+
+
+
+
+### by hand
+tmle_task <- ate_spec$make_tmle_task(cham_household_depress_mean, node_list)
+
+
+initial_likelihood <- ate_spec$make_initial_likelihood(
+  tmle_task,
+  learner_list
+)
+print(initial_likelihood)
+
+targeted_likelihood <- Targeted_Likelihood$new(initial_likelihood)
+
+targeted_likelihood_no_cv <-
+  Targeted_Likelihood$new(initial_likelihood,
+    updater = list(cvtmle = FALSE)
+  )
+
+tmle_params <- ate_spec$make_params(tmle_task, targeted_likelihood)
+print(tmle_params)
+
+tmle_fit_manual <- fit_tmle3(
+  tmle_task, targeted_likelihood, tmle_params,
+  targeted_likelihood$updater
+)
+print(tmle_fit_manual)
 ```
 
 
@@ -1119,124 +1112,82 @@ print(treat)
 ```
 
 
-```{r, sleep tmle another way by hand}
-### sleep outcome
+```{r, sleep tmle using tmle3 package}
+# get rid of observations missing exposure, outcome, covars
 cham_household_sleep_mean <- cham_household_analytic %>% filter(!is.na(avg_sleep))
 cham_household_sleep_mean <- cham_household_sleep_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
                                                                 is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
                                                                 is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
 
-## make ppb2_mc1 variable numeric
-cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+# make variables factor vars
+cham_household_sleep_mean$ppb2_mc1 <- as.factor(cham_household_sleep_mean$ppb2_mc1)
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(ageusa18_cat_num = ifelse(ageusa_18 == "0", 0, 
+                                                                     ifelse(ageusa_18 == "<18", 1, 2)))
 
-cham_household_sleep_mean <- cham_household_sleep_mean %>% dplyr::select(avg_sleep, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
-                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
-                                                                     menoind_mc1, alc)
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(lang_exam_mc1_num = ifelse(lang_exam_mc1 == "English", 0, 1))
 
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(educcat_num = ifelse(educcat_mom == "<=6th grade", 0, 
+                                                                  ifelse(educcat_mom == "7-11th grade", 1, 2)))
 
-ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, 
-                family = binomial, data = cham_household_sleep_mean)
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(married_num = ifelse(married == "not married", 0, 1))
 
-g_hat <- predict(ps_model, type = "response")  # Estimated propensity score
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(pov_num = ifelse(pov_binary == "At or below poverty", 0, 1))
 
+cham_household_sleep_mean <- cham_household_sleep_mean %>% mutate(work_num = ifelse(work_mc1 == "Did not work since last visit", 0, 1))
 
-q_model <- lm(avg_sleep ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-              pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = cham_household_sleep_mean)
-Q_hat <- predict(q_model)  # Initial outcome model predictions
+cham_household_sleep_mean$menoind_mc1 <- as.factor(cham_household_sleep_mean$menoind_mc1)
 
+cham_household_sleep_mean$alc <- as.factor(cham_household_sleep_mean$alc)
 
+# create node list
+node_list <- list(A = "ppb2_mc1",
+                  Y = "avg_sleep",
+                  W = c("age_qx_mc1", "ageusa18_cat_num", "lang_exam_mc1_num", "educcat_num", "married_num", "pov_num", "work_num", "lvhome_n18_mc1",
+       "menoind_mc1", "alc"))
 
-H_AW <- (cham_household_sleep_mean$A / g_hat) - ((1 - cham_household_sleep_mean$A) / (1 - g_hat))
+# process any missings
+processed <- process_missing(cham_household_sleep_mean, node_list)
+cham_household_sleep_mean <- processed$data
+node_list <- processed$node_list
 
-
-
-epsilon_model <- glm(avg_sleep ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = cham_household_sleep_mean)
-epsilon <- coef(epsilon_model)
-
-
-Q_star <- Q_hat + epsilon * H_AW
-
-
-data_A1 <- cham_household_sleep_mean
-data_A1$A <- 1
-Q1_star <- predict(q_model, newdata = data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
-
-data_A0 <- cham_household_sleep_mean
-data_A0$A <- 0
-Q0_star <- predict(q_model, newdata = data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
-
-tmle_estimate <- mean(Q1_star - Q0_star)
-tmle_estimate
+# create a spec object
+ate_spec <- tmle_ATE(treatment_level = ">2",
+                     control_level = "<=2")
 
 
+# Check learners by data type
+sl3_list_learners(properties = "binomial");
+sl3_list_learners(properties = "continuous")
 
-# Influence function components
-IC <- H_AW * (cham_household_sleep_mean$avg_sleep - Q_star) + (Q1_star - Q0_star)
+# choose base learners
+lrnr_mean <- make_learner(Lrnr_mean)
+lrnr_glm <- make_learner(Lrnr_glm)
+lrnr_glmnet <- make_learner(Lrnr_glmnet)
+lrnr_earth <- make_learner(Lrnr_earth)
+lrnr_xgboost <- make_learner(Lrnr_xgboost)
 
-# Standard Error (SE)
-SE <- sd(IC) / sqrt(nrow(cham_household_sleep_mean))
-
-# 95% Confidence Interval
-lower_CI <- tmle_estimate - 1.96 * SE
-upper_CI <- tmle_estimate + 1.96 * SE
-
-# Print results
-cat("TMLE Estimate:", tmle_estimate, "\n")
-cat("95% CI: [", lower_CI, ",", upper_CI, "]\n")
-
-
-
-# Number of bootstrap samples
-B <- 500  
-tmle_bootstrap <- numeric(B)  
+# define metalearners appropriate to data types
+ls_metalearner <- make_learner(Lrnr_nnls)
+mn_metalearner <- make_learner(Lrnr_solnp)
 
 
-# Bootstrap procedure
-set.seed(124)
-for (b in 1:B) {
-  boot_indices <- sample(1:nrow(cham_household_sleep_mean), size = nrow(cham_household_sleep_mean), replace = TRUE)  
-  boot_data <- cham_household_sleep_mean[boot_indices, ] 
-  
-  # Re-estimate g (propensity score)
-  ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, family = binomial, data = boot_data)
-  g_hat <- predict(ps_model, type = "response")
-  
-  # Re-estimate Q (outcome regression)
-  q_model <- lm(avg_sleep ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = boot_data)
-  Q_hat <- predict(q_model)
-  
-  # Compute clever covariate
-  H_AW <- (boot_data$A / g_hat) - ((1 - boot_data$A) / (1 - g_hat))
-  
-  # Fit fluctuation model
-  epsilon_model <- glm(avg_sleep ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = boot_data)
-  epsilon <- coef(epsilon_model)
-  
-  # Update Q*
-  Q_star <- Q_hat + epsilon * H_AW
-  
-  # Compute counterfactual outcomes
-  boot_data_A1 <- boot_data
-  boot_data_A1$A <- 1
-  Q1_star <- predict(q_model, newdata = boot_data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+sl_Y <- Lrnr_sl$new(
+  learners = list(lrnr_mean, lrnr_glm))
+  #metalearner = ls_metalearner)
 
-  boot_data_A0 <- boot_data
-  boot_data_A0$A <- 0
-  Q0_star <- predict(q_model, newdata = boot_data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
 
-  # Compute TMLE estimate for bootstrap sample
-  tmle_bootstrap[b] <- mean(Q1_star - Q0_star)
-}
+sl_A <- Lrnr_sl$new(
+  learners = list(lrnr_mean, lrnr_glm))
+  #metalearner = mn_metalearner)
 
-# Compute bootstrap confidence intervals
-CI_lower <- quantile(tmle_bootstrap, probs = 0.025)
-CI_upper <- quantile(tmle_bootstrap, probs = 0.975)
 
-cat("Bootstrap TMLE Estimate:", mean(tmle_bootstrap), "\n")
-cat("95% Bootstrap CI: [", CI_lower, ",", CI_upper, "]\n")
+learner_list <- list(A = sl_A, Y = sl_Y)
+
+tmle_fit <- tmle3(ate_spec, cham_household_sleep_mean, node_list, learner_list)
+print(tmle_fit)
+
+estimates <- tmle_fit$summary$psi_transformed
+print(estimates)
 ```
 
 
@@ -1465,136 +1416,96 @@ treat <- lmtp_tmle(
   shift = d1,
   folds = 10, 
   learners_trt = c("SL.glm", "SL.mean"),
-  learners_outcome = c("SL.glm", "SL.mean")
+  learners_outcome = c("SL.glm", "SL.mean", "SL.glmnet", "SL.earth", "SL.xgboost")
 )
 
 print(treat)
 ```
 
 
-```{r, memory tmle another way by hand}
-### sleep outcome
+```{r, memory tmle using tmle3 package}
+# get rid of observations missing exposure, outcome, covars
 cham_household_mem_mean <- cham_household_analytic %>% filter(!is.na(memory_mc1))
 cham_household_mem_mean <- cham_household_mem_mean %>% filter(!(is.na(ppb2_mc1) | is.na(age_qx_mc1) | is.na(ageusa_18) | 
                                                                 is.na(lang_exam_mc1) | is.na(educcat_mom) | is.na(married) | is.na(pov_binary) | 
                                                                 is.na(work_mc1) | is.na(lvhome_n18_mc1) | is.na(menoind_mc1) | is.na(alc)))
 
-## make ppb2_mc1 variable numeric
-cham_household_mem_mean <- cham_household_mem_mean %>% mutate(A = ifelse(ppb2_mc1 == "<=2", 0, 1))
+# make variables factor vars
+cham_household_mem_mean$ppb2_mc1 <- as.factor(cham_household_mem_mean$ppb2_mc1)
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(ageusa18_cat_num = ifelse(ageusa_18 == "0", 0, 
+                                                                     ifelse(ageusa_18 == "<18", 1, 2)))
 
-cham_household_mem_mean <- cham_household_mem_mean %>% dplyr::select(memory_mc1, A, age_qx_mc1, ageusa_18, lang_exam_mc1,
-                                                                     educcat_mom, married, pov_binary, work_mc1, lvhome_n18_mc1,
-                                                                     menoind_mc1, alc)
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(lang_exam_mc1_num = ifelse(lang_exam_mc1 == "English", 0, 1))
 
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(educcat_num = ifelse(educcat_mom == "<=6th grade", 0, 
+                                                                  ifelse(educcat_mom == "7-11th grade", 1, 2)))
 
-ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, 
-                family = binomial, data = cham_household_mem_mean)
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(married_num = ifelse(married == "not married", 0, 1))
 
-g_hat <- predict(ps_model, type = "response")  # Estimated propensity score
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(pov_num = ifelse(pov_binary == "At or below poverty", 0, 1))
 
+cham_household_mem_mean <- cham_household_mem_mean %>% mutate(work_num = ifelse(work_mc1 == "Did not work since last visit", 0, 1))
 
-q_model <- lm(memory_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-              pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = cham_household_mem_mean)
-Q_hat <- predict(q_model)  # Initial outcome model predictions
+cham_household_mem_mean$menoind_mc1 <- as.factor(cham_household_mem_mean$menoind_mc1)
 
+cham_household_mem_mean$alc <- as.factor(cham_household_mem_mean$alc)
 
+# create node list
+node_list <- list(A = "ppb2_mc1",
+                  Y = "memory_mc1",
+                  W = c("age_qx_mc1", "ageusa18_cat_num", "lang_exam_mc1_num", "educcat_num", "married_num", "pov_num", "work_num", "lvhome_n18_mc1",
+       "menoind_mc1", "alc"))
 
-H_AW <- (cham_household_mem_mean$A / g_hat) - ((1 - cham_household_mem_mean$A) / (1 - g_hat))
+# process any missings
+processed <- process_missing(cham_household_mem_mean, node_list)
+cham_household_mem_mean <- processed$data
+node_list <- processed$node_list
 
-
-
-epsilon_model <- glm(memory_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = cham_household_mem_mean)
-epsilon <- coef(epsilon_model)
-
-
-Q_star <- Q_hat + epsilon * H_AW
-
-
-data_A1 <- cham_household_mem_mean
-data_A1$A <- 1
-Q1_star <- predict(q_model, newdata = data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
-
-data_A0 <- cham_household_mem_mean
-data_A0$A <- 0
-Q0_star <- predict(q_model, newdata = data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
-
-tmle_estimate <- mean(Q1_star - Q0_star)
-tmle_estimate
+# create a spec object
+ate_spec <- tmle_ATE(treatment_level = ">2",
+                     control_level = "<=2")
 
 
+# Check learners by data type
+sl3_list_learners(properties = "binomial");
+sl3_list_learners(properties = "continuous")
 
-# Influence function components
-IC <- H_AW * (cham_household_mem_mean$memory_mc1 - Q_star) + (Q1_star - Q0_star)
+# choose base learners
+lrnr_mean <- make_learner(Lrnr_mean)
+lrnr_glm <- make_learner(Lrnr_glm)
+lrnr_glmnet <- make_learner(Lrnr_glmnet)
+lrnr_earth <- make_learner(Lrnr_earth)
+lrnr_xgboost <- make_learner(Lrnr_xgboost)
 
-# Standard Error (SE)
-SE <- sd(IC) / sqrt(nrow(cham_household_mem_mean))
-
-# 95% Confidence Interval
-lower_CI <- tmle_estimate - 1.96 * SE
-upper_CI <- tmle_estimate + 1.96 * SE
-
-# Print results
-cat("TMLE Estimate:", tmle_estimate, "\n")
-cat("95% CI: [", lower_CI, ",", upper_CI, "]\n")
-
-
-
-# Number of bootstrap samples
-B <- 500  
-tmle_bootstrap <- numeric(B)  
+# define metalearners appropriate to data types
+ls_metalearner <- make_learner(Lrnr_nnls)
+mn_metalearner <- make_learner(Lrnr_solnp)
 
 
-# Bootstrap procedure
-set.seed(124)
-for (b in 1:B) {
-  boot_indices <- sample(1:nrow(cham_household_mem_mean), size = nrow(cham_household_mem_mean), replace = TRUE)  
-  boot_data <- cham_household_mem_mean[boot_indices, ] 
-  
-  # Re-estimate g (propensity score)
-  ps_model <- glm(A ~ age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, family = binomial, data = boot_data)
-  g_hat <- predict(ps_model, type = "response")
-  
-  # Re-estimate Q (outcome regression)
-  q_model <- lm(memory_mc1 ~ A + age_qx_mc1 + ageusa_18 + lang_exam_mc1 + educcat_mom + married +
-                pov_binary + work_mc1 + lvhome_n18_mc1 + menoind_mc1 + alc, data = boot_data)
-  Q_hat <- predict(q_model)
-  
-  # Compute clever covariate
-  H_AW <- (boot_data$A / g_hat) - ((1 - boot_data$A) / (1 - g_hat))
-  
-  # Fit fluctuation model
-  epsilon_model <- glm(memory_mc1 ~ -1 + offset(Q_hat) + H_AW, family = gaussian, data = boot_data)
-  epsilon <- coef(epsilon_model)
-  
-  # Update Q*
-  Q_star <- Q_hat + epsilon * H_AW
-  
-  # Compute counterfactual outcomes
-  boot_data_A1 <- boot_data
-  boot_data_A1$A <- 1
-  Q1_star <- predict(q_model, newdata = boot_data_A1) + epsilon * ((1 / g_hat) - (0 / (1 - g_hat)))
+sl_Y <- Lrnr_sl$new(
+  learners = list(lrnr_mean, lrnr_glm, lrnr_glmnet, lrnr_earth, lrnr_xgboost))
+  #metalearner = ls_metalearner)
 
-  boot_data_A0 <- boot_data
-  boot_data_A0$A <- 0
-  Q0_star <- predict(q_model, newdata = boot_data_A0) + epsilon * ((0 / g_hat) - (1 / (1 - g_hat)))
 
-  # Compute TMLE estimate for bootstrap sample
-  tmle_bootstrap[b] <- mean(Q1_star - Q0_star)
-}
+sl_A <- Lrnr_sl$new(
+  learners = list(lrnr_mean, lrnr_glm))
+  #metalearner = mn_metalearner)
 
-# Compute bootstrap confidence intervals
-CI_lower <- quantile(tmle_bootstrap, probs = 0.025)
-CI_upper <- quantile(tmle_bootstrap, probs = 0.975)
 
-cat("Bootstrap TMLE Estimate:", mean(tmle_bootstrap), "\n")
-cat("95% Bootstrap CI: [", CI_lower, ",", CI_upper, "]\n")
+learner_list <- list(A = sl_A, Y = sl_Y)
+
+tmle_fit <- tmle3(ate_spec, cham_household_mem_mean, node_list, learner_list)
+print(tmle_fit)
+
+estimates <- tmle_fit$summary$psi_transformed
+print(estimates)
 ```
 
 
-## Make all variables numeric and calculate analytic sample
-```{r, make all variables numeric}
+#### Mediation Analyes ####
+
+## Create numeric exposure variables
+```{r, make number of people per bedroom and number of people per room numeric}
 # make people per bedroom numeric 
 cham_household <- cham_household %>% mutate(ppb2_num = ifelse(ppb2_mc1 == "<=2", 0, 
                                                        ifelse(ppb2_mc1 == ">2", 1, NA)))
@@ -1605,8 +1516,11 @@ cham_household <- cham_household %>% mutate(ppr1_num = ifelse(ppr_1 == "<=1", 0,
                                                        ifelse(ppr_1 == ">1", 1, NA)))
 
 cham_household %>% group_by(ppr1_num) %>% count()
+```
 
 
+## Make all variables numeric and calculate analytic sample
+```{r, make all variables numeric}
 cham_household <- cham_household %>% mutate(sleep_sq = avg_sleep^2)
 # select relevant variables
 cham_household_med <- cham_household %>% dplyr::select(age_qx_mc1, ageusa_18, lang_exam_mc1, educcat_mom, 
@@ -1665,13 +1579,11 @@ cham_household_med <- cham_household_med %>% filter(!is.na(ppb2_num) & !is.na(ag
                               !is.na(avg_sleep) & !is.na(depress_mc1) & !is.na(gadscore_mc1) & 
                               !is.na(summary_health_num) & !is.na(menoind_mc1) & !is.na(alc)) 
 cham_household_med
-# calculate number of individuals missing neurocog outcomes                                                       
-cham_household_med %>% filter(!is.na(memory_mc1))   
-cham_household_med %>% filter(!is.na(global_rc_mc1))  
 ```
 
 
-```{r}
+## Mediation using crumble
+```{r, mediation using crumble package}
 ### memory outcome
 cham_household_med_mem <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
                                                                educcat_num, married_num, pov_num, work_num,
@@ -1717,16 +1629,16 @@ crumble_memory <- crumble(
     d1 = \(data, trt) rep(1, nrow(data)), 
     #effect = "RT",
     effect = "N",
-    learners = c("mean", "glm"),#, "glmnet", "earth", "xgboost"), 
+    learners = c("mean", "glm", "glmnet", "earth", "xgboost"),#, "glmnet", "earth", "xgboost"), 
     nn_module = sequential_module(),
     control = crumble_control(crossfit_folds = 1L, epochs = 10L)
 )
 crumble_memory
 ```
 
+
+## Mediation using medoutcon
 ```{r, mediation using medoutcon}
-library(sl3)
-library(data.table)
 # instantiate learners
 mean_lrnr <- Lrnr_mean$new()
 fglm_lrnr <- Lrnr_glm_fast$new(family = binomial())
@@ -1754,36 +1666,6 @@ lrnr_lib <- Stack$new(
 )
 sl_lrnr <- Lrnr_sl$new(learners = lrnr_lib, metalearner = Lrnr_nnls$new())
 
-make_example_data <- function(n_obs = 1000) {
-  ## baseline covariates
-  w_1 <- rbinom(n_obs, 1, prob = 0.6)
-  w_2 <- rbinom(n_obs, 1, prob = 0.3)
-  w_3 <- rbinom(n_obs, 1, prob = pmin(0.2 + (w_1 + w_2) / 3, 1))
-  w <- cbind(w_1, w_2, w_3)
-  w_names <- paste("W", seq_len(ncol(w)), sep = "_")
-
-  ## exposure
-  a <- as.numeric(rbinom(n_obs, 1, plogis(rowSums(w) - 2)))
-
-  ## mediator-outcome confounder affected by treatment
-  z <- rbinom(n_obs, 1, plogis(rowMeans(-log(2) + w - a) + 0.2))
-
-  ## mediator -- could be multivariate
-  m <- rbinom(n_obs, 1, plogis(rowSums(log(3) * w[, -3] + a - z)))
-  m_names <- "M"
-
-  ## outcome
-  y <- rbinom(n_obs, 1, plogis(1 / (rowSums(w) - z + a + m)))
-
-  ## construct output
-  dat <- as.data.table(cbind(w = w, a = a, z = z, m = m, y = y))
-  setnames(dat, c(w_names, "A", "Z", m_names, "Y"))
-  return(dat)
-}
-
-example_data <- make_example_data(1000)
-w_names <- stringr::str_subset(colnames(example_data), "W")
-m_names <- stringr::str_subset(colnames(example_data), "M")
 
 
 cham_household_med_mem <- cham_household_med_mem %>% dplyr::select(-Z1, -Z2, -Z3) %>% rename(Z1 = W9, 
@@ -1792,11 +1674,12 @@ cham_household_med_mem <- cham_household_med_mem %>% dplyr::select(-Z1, -Z2, -Z3
 w_names <- stringr::str_subset(colnames(cham_household_med_mem), "W")
 z_names <- stringr::str_subset(colnames(cham_household_med_mem), "Z")
 
-
+# I get a warning when I try to run the medoutcon code below that some fit_control arguments are neither default nor glmnet/cv.glmnet arguments 
+cham_household_med_mem <- as.data.table(cham_household_med_mem)
 de <- medoutcon(
   W = cham_household_med_mem[, ..w_names],
   A = cham_household_med_mem$A,
-  Z = cham_household_med_mem[, ..z_names],
+  Z = NULL,
   M = cham_household_med_mem$M,
   Y = cham_household_med_mem$Y,
   g_learners = sl_lrnr,
@@ -1811,23 +1694,59 @@ de <- medoutcon(
 summary(de)
 
 
-
-
-os_de <- medoutcon(
-  W = example_data[, ..w_names],
-  A = example_data$A,
-  Z = example_data$Z,
-  M = example_data[, ..m_names],
-  Y = example_data$Y,
-  g_learners = sl_lrnr,
-  h_learners = sl_lrnr,
-  b_learners = sl_lrnr,
-  q_learners = sl_lrnr,
-  r_learners = sl_lrnr,
+## this matches the interventional direct effects we see using HDmediation
+tmle_de <- medoutcon(
+  W = cham_household_med_mem[, ..w_names],
+  A = cham_household_med_mem$A,
+  Z = c(cham_household_med_mem$Z1, cham_household_med_mem$Z2),
+  M = cham_household_med_mem$M,
+  Y = cham_household_med_mem$Y,
   effect = "direct",
-  estimator = "onestep",
-  estimator_args = list(cv_folds = 2)
+  estimator = "tmle"
 )
-summary(os_de)
+tmle_de
+
+
+tmle_nde <- medoutcon(
+  W = cham_household_med_mem[, ..w_names],
+  A = cham_household_med_mem$A,
+  #Z = c(cham_household_med_mem$Z1, cham_household_med_mem$Z2),
+  Z = NULL,
+  M = cham_household_med_mem$M,
+  Y = cham_household_med_mem$Y,
+  effect = "direct",
+  estimator = "tmle"
+)
+tmle_de
+```
+
+ 
+```{r, mediation using HDmediation package}
+### memory outcome
+cham_household_med_mem <- cham_household_med %>% dplyr::select(age_qx_mc1, ageusa18_cat_num, lang_exam_mc1_num, 
+                                                               educcat_num, married_num, pov_num, work_num,
+                                                               lvhome_n18_mc1,
+                                                               ppb2_num, depress_mc1, gadscore_mc1,
+                                                               summary_health_num, menoind_mc1, 
+                                                               alc, avg_sleep, memory_mc1) %>% 
+                                                        rename(A = ppb2_num, 
+                                                               W1 = age_qx_mc1, 
+                                                               W2 = ageusa18_cat_num, 
+                                                               W3 = lang_exam_mc1_num, 
+                                                               W4 = educcat_num, 
+                                                               W5 = married_num, 
+                                                               W6 = pov_num, 
+                                                               W7 = work_num, 
+                                                               W8 = lvhome_n18_mc1,
+                                                               M = avg_sleep,
+                                                               Y = memory_mc1, 
+                                                               Z1 = menoind_mc1, 
+                                                               Z2 = alc) %>% drop_na()
+
+cham_household_med_mem <- as.data.frame(cham_household_med_mem)
+
+med_memory <- HDmediation::mediation(cham_household_med_mem, "A", c("W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"), 
+          c("Z1", "Z2"), "M", "Y", "S" = NULL, family = "continuous", folds = 20)
+med_memory
 ```
 
