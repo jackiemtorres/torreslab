@@ -31,6 +31,7 @@ data("metals", package = "qgcomp")
 head(metals)
 ```
  
+ 
 ```{r, create linear model}
 # save names of mixture variables in Xnm and covariated in covars
 Xnm <- c('arsenic', 'barium', 'cadmium', 'calcium', 'chromium', 'copper',
@@ -48,6 +49,7 @@ qc.fit <- qgcomp.glm.noboot(y~.,dat=metals[,c(Xnm, 'y')], family=gaussian())
 
 qc.fit
 ```
+ 
  
 ```{r, underlying linear model of qgcomp fit}
 # quantized data

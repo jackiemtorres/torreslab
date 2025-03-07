@@ -16,7 +16,7 @@ library(tidyr)
 
 ## Read in data
 ```{r, read data}
-cham_all <- read_dta("../Code/torres_stressor_01i_nohsn.dta") # read in CHAMACOS data
+cham_all <- read_dta("../../../Code/torres_stressor_01i_nohsn.dta") # read in CHAMACOS data
 
 head(cham_all) # first 6 rows of dataset
 str(cham_all) # variables and variable types
@@ -246,7 +246,16 @@ cham <- cham %>% mutate(gad4cat_mc1 = ifelse(gad4cat_mc1 == 0, "Minimal",
                                       ifelse(gad4cat_mc1 == 1, "Mild", 
                                       ifelse(gad4cat_mc1 == 2, "Moderate", "Severe"))))
 
-cham <- cham %>% mutate(gad7_4cat_m18y = )
+cham <- cham %>% mutate(gad7_4cat_m18y = ifelse(gad7_4cat_m18y == 0, "Minimal", 
+                                         ifelse(gad7_4cat_m18y == 1, "Mild", 
+                                         ifelse(gad7_4cat_m18y == 2, "Moderate", "Severe"))))
+
+cham <- cham %>% mutate(gad7_4cat_m16y = ifelse(gad7_4cat_m16y == 0, "Minimal", 
+                                         ifelse(gad7_4cat_m16y == 1, "Mild", 
+                                         ifelse(gad7_4cat_m16y == 2, "Moderate", "Severe"))))
+
+cham <- cham %>% mutate(anx_mc1 = ifelse(anx_mc1 == 0, "No", 
+                                  ifelse(anx_mc1 == 1, "Yes", "Don't know")))
 
 cham %>% dplyr::select(gadscore_mc1, gad7_score_m18y, gad7_score_m16y, 
                        gad4cat_mc1, gad7_4cat_m18y, gad7_4cat_m16y, anx_mc1)
@@ -388,7 +397,8 @@ cham_social <- cham %>% dplyr::select(newid, cham, qx_matcog,
                                       depress_mc1, depress_m18y, depress_m16y,
                                       depresscat_mc1, depresscat_m18y, depresscat_m16y,
                                       dep_mc1,
-                                      
+                                      gadscore_mc1, gad7_score_m18y, gad7_score_m16y, 
+                                      gad4cat_mc1, gad7_4cat_m18y, gad7_4cat_m16y, anx_mc1,
                                       summary_health, summary_health_cat_yes, 
                                       diab_mc1, hbp_mc1, heart_mc1, cancer_mc1,
                                       asth_mc1, thyr_mc1, # covariates
