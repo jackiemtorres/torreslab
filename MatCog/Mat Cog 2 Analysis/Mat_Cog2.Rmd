@@ -16,7 +16,7 @@ library(factoextra)
 library(psych)
 
 # Read in longitudinal data 
-matcog <- read_dta("../Code/mat_long_adversity_nohsn.dta")
+matcog <- read_dta("../../Code/mat_long_adversity_nohsn.dta")
 matcog
 
 # Filter to Mat Cog 2 participants only
