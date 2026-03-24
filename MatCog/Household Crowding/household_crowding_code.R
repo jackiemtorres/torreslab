@@ -98,7 +98,7 @@ set.seed(124)
 
 
 #### Read in data ####
-cham_all <- read_dta("torres_stressor_01i_nohsn.dta") # read in CHAMACOS data
+cham_all <- read_dta("../Code/torres_stressor_01i_nohsn.dta") # read in CHAMACOS data
 
 head(cham_all) # first 6 rows of dataset
 str(cham_all) # variables and variable types
@@ -179,6 +179,8 @@ cham %>% group_by(ageusa_cat) %>% count()
 # create adulthood arrival to the US variable: born in US, <18 and 18+
 cham <- cham %>% mutate(ageusa_18 = ifelse(ageusa_cat == "0", "0",
                                            ifelse(ageusa_cat == "<1-17", "<18", "18+")))
+
+cham %>% filter(!is.na(age_qx_mc1)) %>% group_by(ageusa_18) %>% count()
 
 # create categorized language variable
 # 1: English, 2: Spanish

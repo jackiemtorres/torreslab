@@ -1,0 +1,828 @@
+---
+title: "Mat Cog 2"
+author: "Kelsey MacCuish"
+output: pdf_document
+---
+
+```{r read data, include=FALSE}
+# Load libraries
+library(haven)
+library(tidyverse)
+library(ggplot2)
+library(corrplot)
+library(FactoMineR)
+library(ggcorrplot)
+library(factoextra)
+library(psych)
+
+# Read in longitudinal data 
+matcog <- read_dta("../Code/mat_long_adversity_nohsn.dta")
+matcog
+
+# Filter to Mat Cog 2 participants only
+mc2 <- matcog %>% filter(complete_qx_mc2 == 1)
+```
+
+##### Adult Education #####
+```{r, highest educational attainment of adult children NOT in school}
+# Adult children not in school
+mc2 %>% group_by(adchnoschl_n_mc2) %>% count() # there are 44 women who have 0 adult children not in school (and 1 NA)
+
+# Adult child educational attainment: < HS
+mc2 %>% group_by(adchedu1_mc2) %>% count() 
+
+# Adult child educational attainment: some high school
+mc2 %>% group_by(adchedu2_mc2) %>% count()
+
+# Adult child educational attainment: high school grad/GED
+mc2 %>% group_by(adchedu3_mc2) %>% count()
+
+# Adult child educational attainment: technical school
+mc2 %>% group_by(adchedu4_mc2) %>% count()
+
+# Adult child educational attainment: some college
+mc2 %>% group_by(adchedu5_mc2) %>% count()
+
+# Adult child educational attainment: college grad
+mc2 %>% group_by(adchedu6_mc2) %>% count()
+
+# Adult child educational attainment: masters
+mc2 %>% group_by(adchedu7_mc2) %>% count()
+
+# Adult child educational attainment: doctoral
+mc2 %>% group_by(adchedu8_mc2) %>% count()
+
+# Adult child educational attainment: don't know
+mc2 %>% group_by(adchedu9_mc2) %>% count()
+
+# Educational attainment among those who say they don't know highest attainment level
+mc2 %>% filter(adchedu9_mc2 == 1) %>% select(adchedu1_mc2, adchedu2_mc2, adchedu3_mc2,
+                                             adchedu4_mc2,
+                                             adchedu5_mc2, adchedu6_mc2, adchedu7_mc2,
+                                             adchedu8_mc2, adchedu9_mc2)
+
+# Create ranking system of highest educational level attained
+# 0s indicate unknowns
+mc2 <- mc2 %>% mutate(rank1 = ifelse(adchedu1_mc2 == 1, 1, 0),
+                      rank2 = ifelse(adchedu2_mc2 == 1, 2, 0),
+                      rank3 = ifelse(adchedu3_mc2 == 1, 3, 0),
+                      rank4 = ifelse(adchedu4_mc2 == 1, 4, 0),
+                      rank5 = ifelse(adchedu5_mc2 == 1, 5, 0),
+                      rank6 = ifelse(adchedu6_mc2 == 1, 6, 0),
+                      rank7 = ifelse(adchedu7_mc2 == 1, 7, 0),
+                      rank8 = ifelse(adchedu8_mc2 == 1, 8, 0))
+
+# Highest education level is the highest ranked across all education attained
+mc2 <- mc2 %>% mutate(highest_rank_adch_no_schl = pmax(rank1, rank2, rank3, rank4, rank5, rank6, rank7, rank8))
+
+# Visual inspection of education attainment levels
+mc2 %>% select(rank1, rank2, rank3, rank4, rank5, rank6, rank7, rank8, highest_rank_adch_no_schl)
+
+# Check educational attainment among those whose highest rank is 0 (i.e., missing)
+mc2 %>% filter(highest_rank_adch_no_schl == 0) %>% select(adchedu1_mc2, adchedu2_mc2,
+                                                         adchedu3_mc2,
+                                             adchedu4_mc2,
+                                             adchedu5_mc2, adchedu6_mc2, adchedu7_mc2,
+                                             adchedu8_mc2, adchedu9_mc2)
+
+# Rename highest education level rankings
+mc2 <- mc2 %>% mutate(highest_educ_adch = ifelse(highest_rank_adch_no_schl == 0, "Unknown", 
+                                          ifelse(highest_rank_adch_no_schl == 1, "<HS",
+                                          ifelse(highest_rank_adch_no_schl == 2, "Some HS",
+                                          ifelse(highest_rank_adch_no_schl == 3, "High School Grad/GED",
+                                          ifelse(highest_rank_adch_no_schl == 4, "Technical School",
+                                          ifelse(highest_rank_adch_no_schl == 5, "Some College",
+                                          ifelse(highest_rank_adch_no_schl == 6, "College Grad",
+                                          ifelse(highest_rank_adch_no_schl == 7, "Masters",
+                                          ifelse(highest_rank_adch_no_schl == 8, "Doctoral", 
+                                          ifelse(is.na(highest_rank_adch_no_schl), "No adult children not in school", NA)))))))))))
+
+# Distribution of highest education level
+mc2 %>% group_by(highest_rank_adch_no_schl) %>% count()
+mc2 %>% group_by(highest_educ_adch) %>% count()
+
+# Only include those with adult children who are not in school
+adchedu_only <- mc2 %>% filter(!is.na(highest_educ_adch))
+
+# Plot highest education level among those with adult children who are not in school
+ggplot(data = adchedu_only, aes(x = reorder(highest_educ_adch, highest_rank_adch_no_schl))) + 
+  geom_bar(aes(fill = highest_educ_adch)) +
+  theme_minimal(base_size = 10) +
+  labs(y = "Number of adult children", x = "Highest education level") +
+  scale_x_discrete(labels = c("Unknown", "<HS", "Some \n High School", "High School Grad \n or GED", "Technical \n School", "Some \n College", "College \n Grad", "Masters")) +
+  geom_text(
+    aes(label = after_stat(count), y = after_stat(count)),
+    stat = "count",
+    vjust = -0.5,
+    color = "black") +
+  theme(legend.position = "none")
+
+# True unknowns
+mc2 %>% filter(highest_rank_adch_no_schl == 0) %>% select(adchedu1_mc2, adchedu2_mc2,
+                                                          adchedu3_mc2,
+                                             adchedu4_mc2,
+                                             adchedu5_mc2, adchedu6_mc2, adchedu7_mc2,
+                                             adchedu8_mc2, adchedu9_mc2)
+
+
+# Check that mothers did not select more education levels than number of adult children not in school
+mc2 %>% select(adchnoschl_n_mc2)
+
+mc2 <- mc2 %>% mutate(tot_educ_adch_no_school = adchedu1_mc2 + adchedu2_mc2 + adchedu3_mc2 +
+                                          adchedu4_mc2 + adchedu5_mc2 + adchedu6_mc2 +
+                                          adchedu7_mc2 + adchedu8_mc2 + adchedu9_mc2)
+
+
+# total summed education levels for adult children not in school
+# value might not equal the number of adult children not in school because each education level is a binary indicator and doesn't equal the number of children who have received that level of education
+mc2 %>% group_by(tot_educ_adch_no_school) %>% count()
+
+# total number of adult children not in school
+mc2 %>% group_by(adchnoschl_n_mc2) %>% count()
+
+
+# there are 2 women who selected more education levels (3) than number of adult children not in school (2)
+mc2 %>% filter(adchnoschl_n_mc2 < tot_educ_adch_no_school) %>% 
+        select(adchedu1_mc2, adchedu2_mc2, adchedu3_mc2, adchedu4_mc2,
+               adchedu5_mc2, adchedu6_mc2, adchedu7_mc2, adchedu8_mc2,
+               adchedu9_mc2, tot_educ_adch_no_school, adchnoschl_n_mc2)
+```
+
+
+```{r, highest educational attainment of adult children currently in school}
+# Adult children currently in school 
+mc2 %>% group_by(adchschl_n_mc2) %>% count() # there are 253 women who have 0 adult children currently in school (and 1 NA)
+
+# Educational attainment among those who say they don't know highest attainment level
+mc2 %>% filter(adchcurschl9_mc2 == 1) %>% select(adchcurschl1_mc2, adchcurschl2_mc2,
+                                             adchcurschl3_mc2, adchcurschl4_mc2,
+                                             adchcurschl9_mc2)
+
+# Create ranking system of highest educational level attained
+# 0s indicate unknowns
+mc2 <- mc2 %>% mutate(rank2 = ifelse(adchcurschl1_mc2 == 1, 2.5, 0),
+                      rank4 = ifelse(adchcurschl4_mc2 == 1 , 4, 0),
+                      rank5 = ifelse(adchcurschl2_mc2 == 1, 5.5, 0),
+                      rank7 = ifelse(adchcurschl3_mc2 == 1, 7.5, 0))
+
+# Highest education level is the highest ranked across all education attained
+mc2 <- mc2 %>% mutate(highest_rank_current_ed = pmax(rank2, rank4, rank5, rank7))
+
+# Visual inspection of education attainment levels
+mc2 %>% select(rank2, rank4, rank5, rank7, highest_rank_current_ed)
+
+
+# Check educational attainment among those whose highest rank is 0 (i.e., missing)
+mc2 %>% filter(highest_rank_current_ed == 0) %>% select(adchcurschl1_mc2, adchcurschl4_mc2,
+                                                        adchcurschl2_mc2, adchcurschl3_mc2,
+                                                        adchcurschl9_mc2, highest_rank_current_ed)
+
+
+# Rename highest education level rankings
+mc2 <- mc2 %>% mutate(highest_educ_current = 
+                      ifelse(highest_rank_current_ed == 0, "Unknown", 
+                      ifelse(highest_rank_current_ed == 2.5, "HS",
+                      ifelse(highest_rank_current_ed == 4, "Other school/training",
+                      ifelse(highest_rank_current_ed == 5.5, "College",
+                      ifelse(highest_rank_current_ed == 7.5, "Grad School",
+                      ifelse(is.na(highest_rank_current_ed), "No adult children in school", NA)))))))
+
+
+# Distribution of highest education level
+mc2 %>% group_by(highest_rank_current_ed) %>% count()
+mc2 %>% group_by(highest_educ_current) %>% count()
+
+
+# Only include those with adult children who are currently in school
+current_only <- mc2 %>% filter(!is.na(highest_educ_current))
+
+# Plot highest education level among those with adult children who are currently in school
+ggplot(data = current_only, aes(x = reorder(highest_educ_current, highest_rank_current_ed))) + 
+  geom_bar(aes(fill = highest_educ_current)) +
+  theme_minimal(base_size = 10) +
+  labs(y = "Number of adult children", x = "Highest education level") +
+  scale_x_discrete(labels = c("Unknown", "High School", "Other School/\n Job Training", "College",
+                              "Grad School")) +
+  geom_text(
+    aes(label = after_stat(count), y = after_stat(count)),
+    stat = "count",
+    vjust = -0.5,
+    color = "black") +
+  theme(legend.position = "none")
+
+
+# Check that mothers did not select more education levels than number of adult children currently in school
+mc2 <- mc2 %>% mutate(tot_educ_current_schl = adchcurschl1_mc2 + adchcurschl4_mc2 + 
+                                              adchcurschl2_mc2 + adchcurschl3_mc2 + 
+                                              adchcurschl9_mc2)
+
+
+# total summed education levels for adult children currently in school
+# value might not equal the number of adult children currently in school because each education level is a binary indicator and doesn't equal the number of children who have received that level of education
+mc2 %>% group_by(tot_educ_current_schl) %>% count()
+
+# total number of adult children currently in school
+mc2 %>% group_by(adchschl_n_mc2) %>% count()
+
+
+# there are 0 women who selected more education levels than number of adult children currently in school
+mc2 %>% filter(adchschl_n_mc2 < tot_educ_current_schl) %>% 
+        select(adchcurschl1_mc2, adchcurschl4_mc2, adchcurschl2_mc2, 
+               adchcurschl3_mc2, adchcurschl9_mc2, 
+               tot_educ_current_schl, adchschl_n_mc2)
+```
+
+
+```{r, highest education level among all adult children}
+# highest education among adult children 
+mc2 %>% select(highest_rank_adch_no_schl, highest_educ_adch, 
+               highest_rank_current_ed, highest_educ_current)
+
+# if one education is NA, defer to the other
+# if both education levels are present, choose the highest value
+# if both are missing, list as missing
+mc2 <- mc2 %>% mutate(highest_overall_educ = 
+                      ifelse(is.na(highest_rank_adch_no_schl) & !is.na(highest_rank_current_ed), highest_rank_current_ed,
+                      ifelse(is.na(highest_rank_current_ed) & !is.na(highest_rank_adch_no_schl), highest_rank_adch_no_schl,
+                      ifelse(!is.na(highest_rank_adch_no_schl) & !is.na(highest_rank_current_ed), pmax(highest_rank_adch_no_schl, highest_rank_current_ed), NA))))
+
+# Distribution of highest overall education level
+mc2 %>% group_by(highest_overall_educ) %>% count()
+
+
+mc2 %>% select(highest_rank_adch_no_schl, highest_educ_adch, 
+               highest_rank_current_ed, highest_educ_current, highest_overall_educ)
+
+
+
+# Rename highest education level rankings
+mc2 <- mc2 %>% mutate(highest_overall_educ_name = ifelse(highest_overall_educ == 0.0, "Unknown",
+                                                  ifelse(highest_overall_educ == 1.0, "<HS",
+                                                  ifelse(highest_overall_educ == 2.0, "Some High School",
+                                                  ifelse(highest_overall_educ == 2.5, "Current High School", 
+                                                  ifelse(highest_overall_educ == 3.0, "High School Grad/GED",
+                                                  ifelse(highest_overall_educ == 4.0, "Technical School/Job Training",
+                                                  ifelse(highest_overall_educ == 5.0, "Some College", 
+                                                  ifelse(highest_overall_educ == 5.5, "Current College",
+                                                  ifelse(highest_overall_educ == 6.0, "College Grad",
+                                                  ifelse(highest_overall_educ == 7.0, "Masters",
+                                                  ifelse(highest_overall_educ == 7.5, "Current Grad School",
+                                                  ifelse(highest_overall_educ == 8.0, "Doctoral", NA)))))))))))))
+
+# Check distribution of highest education name
+mc2 %>% group_by(highest_overall_educ, highest_overall_educ_name) %>% count()
+
+
+# Plot highest education level among those with adult children
+ggplot(data = mc2, aes(x = reorder(highest_overall_educ_name, highest_overall_educ))) + 
+  geom_bar(aes(fill = highest_overall_educ_name)) +
+  theme_minimal(base_size = 10) +
+  labs(y = "Number of adult children", x = "Highest education level") +
+  scale_x_discrete(labels = c("Unknown", "Some\nHigh\nSchool", "Current\nHigh\nSchool",
+                              "High School\nGrad/GED", "Technical\nSchool/\nJob Training",
+                              "Some\nCollege", "Current\nCollege", "College\nGrad",
+                              "Masters", "Current\nGrad School")) +
+  geom_text(
+    aes(label = after_stat(count), y = after_stat(count)),
+    stat = "count",
+    vjust = -0.5,
+    color = "black") +
+  theme(legend.position = "none")
+
+
+# check if women are checking more education boxes than adult children
+
+# If total education sum is missing, set to 0
+mc2 <- mc2 %>% mutate(tot_educ_adch_no_school = 
+                        ifelse(is.na(tot_educ_adch_no_school), 0, tot_educ_adch_no_school),
+                      tot_educ_current_schl = 
+                        ifelse(is.na(tot_educ_current_schl), 0, tot_educ_current_schl))
+
+# create new sum of total education levels
+mc2 <- mc2 %>% mutate(tot_educ = tot_educ_adch_no_school + tot_educ_current_schl)
+
+# Distribution of total education levels and number of adult children
+mc2 %>% group_by(tot_educ) %>% count()
+mc2 %>% group_by(child18ov_mc2) %>% count()
+
+# Same 2 women (with adult children who are not in school) reported more education levels than children
+mc2 %>% filter(child18ov_mc2 < tot_educ) %>% select(newid, adchedu1_mc2, adchedu2_mc2,
+                                                    adchedu3_mc2,
+                                                    adchedu4_mc2,
+               adchedu5_mc2, adchedu6_mc2, adchedu7_mc2, adchedu8_mc2,
+               adchedu9_mc2, adchcurschl1_mc2, adchcurschl4_mc2, adchcurschl2_mc2, 
+               adchcurschl3_mc2, adchcurschl9_mc2, 
+               tot_educ_current_schl, adchschl_n_mc2, tot_educ_adch_no_school, adchnoschl_n_mc2, child18ov_mc2, tot_educ)
+```
+
+
+```{r, recategorize adult child education}
+#### Larger version ####
+mc2 %>% group_by(highest_overall_educ_name) %>% count()
+
+# Create 6 groupings for adult child education
+mc2 <- mc2 %>% mutate(larger_adch_educ = ifelse(highest_overall_educ_name == "Some High School" | highest_overall_educ_name == "Current High School" | highest_overall_educ_name == "High School Grad/GED", "High School", 
+                                         ifelse(highest_overall_educ_name == "Technical School/Job Training", "Technical School", 
+                                         ifelse(highest_overall_educ_name == "Some College", "Some College", 
+                                         ifelse(highest_overall_educ_name == "Current College", "Current College",
+                                         ifelse(highest_overall_educ_name == "College Grad", "College Grad", 
+                                         ifelse(highest_overall_educ_name == "Masters" | highest_overall_educ_name == "Current Grad School", "More than college",
+                                         ifelse(highest_overall_educ_name == "Unknown", "Unknown", NA))))))))
+
+mc2_larger <- mc2 %>% filter(!is.na(larger_adch_educ) & larger_adch_educ != "Unknown")
+
+mc2_larger <- mc2_larger %>% mutate(larger_adch_rank = ifelse(larger_adch_educ == "High School", 1, 
+                                                       ifelse(larger_adch_educ == "Technical School", 2, 
+                                                       ifelse(larger_adch_educ == "Some College", 3, 
+                                                       ifelse(larger_adch_educ == "Current College", 4,
+                                                       ifelse(larger_adch_educ == "College Grad", 5, 6))))))
+
+mc2_larger %>% group_by(larger_adch_educ) %>% count()
+mc2_larger %>% group_by(larger_adch_rank) %>% count()
+
+# Plot larger grouping of highest education level among those with adult children
+ggplot(data = mc2_larger, aes(x = reorder(larger_adch_educ, larger_adch_rank))) + 
+  geom_bar(aes(fill = larger_adch_educ)) +
+  theme_minimal(base_size = 10) +
+  labs(y = "Number of adult children", x = "Highest education level") +
+  scale_x_discrete(labels = c("High School", "Technical School", "Some College", 
+                              "Current College", "College Grad", "More than\n College")) +
+  geom_text(
+    aes(label = after_stat(count), y = after_stat(count)),
+    stat = "count",
+    vjust = -0.5,
+    color = "black") +
+  theme(legend.position = "none")
+
+
+#### Shorter version ####
+
+# create 4 groupings for adult child education
+mc2 <- mc2 %>% mutate(shorter_adch_educ = ifelse(highest_overall_educ_name %in% c("Some High School", "Current High School", "High School Grad/GED"), "High School",
+                                          ifelse(highest_overall_educ_name == "Technical School/Job Training", "Technical School",
+                                          ifelse(highest_overall_educ_name %in% c("Some College", "Current College"), "College",
+                                          ifelse(highest_overall_educ_name %in% c("College Grad", "Masters", "Current Grad School"), "College Grad or Higher",
+                                          ifelse(highest_overall_educ_name == "Unknown", "Unknown", NA))))))
+
+
+mc2_shorter <- mc2 %>% filter(!is.na(shorter_adch_educ) & shorter_adch_educ != "Unknown")
+
+mc2_shorter <- mc2_shorter %>% mutate(shorter_adch_rank = ifelse(shorter_adch_educ == "High School", 1, 
+                                                          ifelse(shorter_adch_educ == "Technical School", 2,
+                                                          ifelse(shorter_adch_educ == "College", 3, 4))))
+
+mc2_shorter %>% group_by(shorter_adch_educ) %>% count()
+mc2_shorter %>% group_by(shorter_adch_rank) %>% count()
+
+# Plot shorter grouping of highest education level among those with adult children
+ggplot(data = mc2_shorter, aes(x = reorder(shorter_adch_educ, shorter_adch_rank))) + 
+  geom_bar(aes(fill = shorter_adch_educ)) +
+  theme_minimal(base_size = 10) +
+  labs(y = "Number of adult children", x = "Highest education level") +
+  scale_x_discrete(labels = c("High School", "Technical School", "College", "College Grad\nor Higher")) +
+  geom_text(
+    aes(label = after_stat(count), y = after_stat(count)),
+    stat = "count",
+    vjust = -0.5,
+    color = "black") +
+  theme(legend.position = "none")
+```
+
+
+```{r, descriptive characteristics of moms by larger grouping of adult child education}
+## Mean age
+mc2 %>% group_by(larger_adch_educ) %>% summarize(mean = mean(age_qx_mc2),
+                                                                sd = sd(age_qx_mc2))
+
+## Mean number of children
+mc2 %>% group_by(larger_adch_educ) %>% summarize(mean = mean(children_n_mc2),
+                                                                sd = sd(children_n_mc2))
+
+## Total number of children (grouped)
+mc2 <- mc2 %>% mutate(total_child_group = ifelse(children_n_mc2 <= 2, "1-2", 
+                                          ifelse(children_n_mc2 == 3 | children_n_mc2 == 4, "3-4", "5+")))
+
+mc2 %>% filter(larger_adch_educ == "High School") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Technical School") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Some College") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Current College") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "College Grad") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "More than college") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Unknown") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(is.na(larger_adch_educ)) %>% group_by(total_child_group) %>% count()
+
+
+## Mean number of kids > 18
+mc2 %>% group_by(larger_adch_educ) %>% summarize(mean = mean(child18ov_mc2),
+                                                                sd = sd(child18ov_mc2))
+
+## Number of kids > 18 (grouped)
+mc2 %>% group_by(child18ov_mc2) %>% count()
+mc2 <- mc2 %>% mutate(total_adch_group = ifelse(child18ov_mc2 == 0, "0",
+                                         ifelse(child18ov_mc2 == 1 | child18ov_mc2 == 2, "1-2",
+                                         ifelse(child18ov_mc2 == 3 | child18ov_mc2 == 4, "3-4", "5+"))))
+
+mc2 %>% filter(larger_adch_educ == "High School") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Technical School") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Some College") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Current College") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "College Grad") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "More than college") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(larger_adch_educ == "Unknown") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(is.na(larger_adch_educ)) %>% group_by(total_adch_group) %>% count()
+
+
+## Nativity
+mc2 <- mc2 %>% mutate(age_came_back_to_us = age_qx_mc1 - yrsusa_matcog)
+
+# if ageusa_bl is -9, participant was born in the US
+mc2 <- mc2 %>% mutate(ageusa_bl = ifelse(ageusa_bl == -9, 0, ageusa_bl))
+
+# if ageusa_bl is < 0, set to 0
+mc2 <- mc2 %>% mutate(ageusa_bl = ifelse(ageusa_bl < 0, 0, ageusa_bl))
+
+# if ageusa_bl is missing, and age_qx_mc1 = yrsusa_matcog, replace ageusa_bl with age_came_back_to_us
+# if age at survey = number of years lived in the US, person has lived in the US their whole life
+# i.e., they did not leave and come back to the US
+mc2 <- mc2 %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & 
+                                           age_qx_mc1 - yrsusa_matcog < 1, age_came_back_to_us, 
+                                                     ageusa_bl))
+
+# set ageusa_bl to 0 for individuals with country_mom = 1 
+mc2 <- mc2 %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & country_mom == 1, 0, ageusa_bl))
+
+
+# categorize age came to the US variable 
+mc2 <- mc2 %>% mutate(ageusa_cat = 
+                        ifelse(country_mom == 1, "0",
+                        ifelse(ageusa_bl > 0 & ageusa_bl < 18, "<1-17", 
+                        ifelse(ageusa_bl >= 18 & ageusa_bl < 25, "18-24",
+                        ifelse(ageusa_bl >= 25, "25+", NA)))))
+
+mc2 %>% filter(larger_adch_educ == "High School") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(larger_adch_educ == "Technical School") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(larger_adch_educ == "Some College") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(larger_adch_educ == "Current College") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(larger_adch_educ == "College Grad") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(larger_adch_educ == "More than college") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(larger_adch_educ == "Unknown") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(is.na(larger_adch_educ)) %>% group_by(ageusa_cat) %>% count()
+
+
+## Mom's education
+mc2 %>% filter(larger_adch_educ == "High School") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(larger_adch_educ == "Technical School") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(larger_adch_educ == "Some College") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(larger_adch_educ == "Current College") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(larger_adch_educ == "College Grad") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(larger_adch_educ == "More than college") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(larger_adch_educ == "Unknown") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(is.na(larger_adch_educ)) %>% group_by(educcat_mom) %>% count()
+
+
+## Poverty status
+mc2 %>% filter(larger_adch_educ == "High School") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Technical School") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Some College") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Current College") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "College Grad") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "More than college") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Unknown") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(is.na(larger_adch_educ)) %>% group_by(povcat_mc2) %>% count()
+
+
+## Marital status
+mc2 %>% filter(larger_adch_educ == "High School") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Technical School") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Some College") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Current College") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "College Grad") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "More than college") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(larger_adch_educ == "Unknown") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(is.na(larger_adch_educ)) %>% group_by(marcat_mc2) %>% count()
+
+
+## Depression (at MC1)
+mc2 %>% filter(larger_adch_educ == "High School") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(larger_adch_educ == "Technical School") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(larger_adch_educ == "Some College") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(larger_adch_educ == "Current College") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(larger_adch_educ == "College Grad") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(larger_adch_educ == "More than college") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(larger_adch_educ == "Unknown") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(is.na(larger_adch_educ)) %>% group_by(depresscat_mc1) %>% count()
+```
+
+
+```{r, descriptive characteristics of moms by shorter grouping of adult child education}
+## Mean age
+mc2 %>% group_by(shorter_adch_educ) %>% summarize(mean = mean(age_qx_mc2),
+                                                                sd = sd(age_qx_mc2))
+
+## Mean number of children
+mc2 %>% group_by(shorter_adch_educ) %>% summarize(mean = mean(children_n_mc2),
+                                                                sd = sd(children_n_mc2))
+
+## Total number of children (grouped)
+mc2 %>% filter(shorter_adch_educ == "College") %>% group_by(total_child_group) %>% count()
+mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(total_child_group) %>% count()
+
+
+## Mean number of kids > 18
+mc2 %>% group_by(shorter_adch_educ) %>% summarize(mean = mean(child18ov_mc2),
+                                                                sd = sd(child18ov_mc2))
+
+## Number of kids > 18 (grouped)
+mc2 %>% filter(shorter_adch_educ == "College") %>% group_by(total_adch_group) %>% count()
+mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(total_adch_group) %>% count()
+
+## Nativity
+mc2 %>% filter(shorter_adch_educ == "College") %>% group_by(ageusa_cat) %>% count()
+mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(ageusa_cat) %>% count()
+
+## Mom's education
+mc2 %>% filter(shorter_adch_educ == "College") %>% group_by(educcat_mom) %>% count()
+mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(educcat_mom) %>% count()
+
+
+## Poverty status
+mc2 %>% filter(shorter_adch_educ == "College") %>% group_by(povcat_mc2) %>% count()
+mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(povcat_mc2) %>% count()
+
+
+## Marital status
+mc2 %>% filter(shorter_adch_educ == "College") %>% group_by(marcat_mc2) %>% count()
+mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(marcat_mc2) %>% count()
+
+
+## Depression
+mc2 %>% filter(shorter_adch_educ == "College") %>% group_by(depresscat_mc1) %>% count()
+mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(depresscat_mc1) %>% count()
+```
+
+
+##### Parental Stress #####
+```{r, parental stress}
+# reverse scoring for qs 1, 2, 5, 6, 7, 8, 17, 18
+mc2 <- mc2 %>% mutate(pss_1_reverse = ifelse(pss1_mc2 == 1, 5, 
+                                      ifelse(pss1_mc2 == 2, 4, 
+                                      ifelse(pss1_mc2 == 3, 3,
+                                      ifelse(pss1_mc2 == 4, 2, 1)))),
+                      pss_2_reverse = ifelse(pss2_mc2 == 1, 5,
+                                      ifelse(pss2_mc2 == 2, 4,
+                                      ifelse(pss2_mc2 == 3, 3,
+                                      ifelse(pss2_mc2 == 4, 2, 1)))),
+                      pss_5_reverse = ifelse(pss5_mc2 == 1, 5,
+                                      ifelse(pss5_mc2 == 2, 4,
+                                      ifelse(pss5_mc2 == 3, 3, 
+                                      ifelse(pss5_mc2 == 4, 2, 1)))),
+                      pss_6_reverse = ifelse(pss6_mc2 == 1, 5,
+                                      ifelse(pss6_mc2 == 2, 4,
+                                      ifelse(pss6_mc2 == 3, 3, 
+                                      ifelse(pss6_mc2 == 4, 2, 1)))),
+                      pss_7_reverse = ifelse(pss7_mc2 == 1, 5,
+                                      ifelse(pss7_mc2 == 2, 4,
+                                      ifelse(pss7_mc2 == 3, 3,
+                                      ifelse(pss7_mc2 == 4, 2, 1)))),
+                      pss_8_reverse = ifelse(pss8_mc2 == 1, 5,
+                                      ifelse(pss8_mc2 == 2, 4,
+                                      ifelse(pss8_mc2 == 3, 3, 
+                                      ifelse(pss8_mc2 == 4, 2, 1)))),
+                      pss_17_reverse = ifelse(pss17_mc2 == 1, 5,
+                                       ifelse(pss17_mc2 == 2, 4,
+                                       ifelse(pss17_mc2 == 3, 3,
+                                       ifelse(pss17_mc2 == 4, 2, 1)))),
+                      pss_18_reverse = ifelse(pss18_mc2 == 1, 5,
+                                       ifelse(pss18_mc2 == 2, 4,
+                                       ifelse(pss18_mc2 == 3, 3,
+                                       ifelse(pss18_mc2 == 4, 2, 1)))))
+
+# calculate overall parental stress score 
+# low score = low level of stress
+# high score = high level of stress
+mc2 <- mc2 %>% mutate(pss_total_score = pss_1_reverse + pss_2_reverse + pss3_mc2 + 
+                                        pss4_mc2 + pss_5_reverse + pss_6_reverse +
+                                        pss_7_reverse + pss_8_reverse + pss9_mc2 + 
+                                        pss10_mc2 + pss11_mc2 + pss12_mc2 + pss13_mc2 + 
+                                        pss14_mc2 + pss15_mc2 + pss16_mc2 + 
+                                        pss_17_reverse + pss_18_reverse)
+
+mc2 %>% group_by(pss_total_score) %>% count()
+
+ggplot(data = mc2, aes(x = pss_total_score)) + 
+  geom_histogram(binwidth = 1, col = "white") + 
+  theme_minimal(base_size = 10)
+```
+
+
+```{r, correlation between parental stress variables}
+# Create correlation matrix 
+mc2_corr <- mc2 %>% select(pss1_mc2, pss2_mc2, pss3_mc2, pss4_mc2, 
+                           pss5_mc2, pss6_mc2, pss7_mc2, pss8_mc2, 
+                           pss9_mc2, pss10_mc2, pss11_mc2, pss12_mc2, 
+                           pss13_mc2, pss14_mc2, pss15_mc2, pss16_mc2, 
+                           pss17_mc2, pss18_mc2)
+
+mc2_corr <- mc2_corr %>% rename(happy_role = pss1_mc2,
+                                nothing_wouldnt_do = pss2_mc2,
+                                too_much_time = pss3_mc2,
+                                worry_doing_enough = pss4_mc2,
+                                feel_close = pss5_mc2,
+                                like_spend_time = pss6_mc2,
+                                affection = pss7_mc2,
+                                future_optimistic = pss8_mc2,
+                                major_stress = pss9_mc2,
+                                no_time_flex = pss10_mc2,
+                                financial_hard = pss11_mc2,
+                                diff_balance = pss12_mc2,
+                                embarrass = pss13_mc2,
+                                no_kids_do_over = pss14_mc2,
+                                overwhelmed_respons = pss15_mc2,
+                                few_choices = pss16_mc2,
+                                satisfied = pss17_mc2,
+                                enjoyable = pss18_mc2)
+
+mc2_corr <- mc2_corr %>% na.omit()
+
+# correlation matrix
+cor_pss <- cor(mc2_corr)
+# happy in role correlated with feel close (0.42), like to spend time (0.25), satisfied (0.45)
+# nothing wouldn't do correlated with like to spend time (0.26)
+# too much time correlated with worry doing enough (0.34), major stress (0.28), no time or flexibility (0.33), difficult to balance (0.31)
+# worry doing enough correlated with difficult to balance (0.26)
+# like to spend time correlated with enjoyable (0.39)
+# affection correlated with like to spend time (0.58)
+
+
+cortest.bartlett(mc2_corr) # do correlations exist? 
+KMO(mc2_corr) # assess sampling adequacy 
+det(cor(mc2_corr)) # check for multicollinearity
+
+# Create correlogram
+corrplot(cor_pss, tl.col = "black")
+```
+
+
+```{r, PCA of parental stress variables}
+# normalize variables
+mc2_corr_norm <- scale(mc2_corr)
+
+# PCA
+pca <- princomp(mc2_corr_norm)
+summary(pca) # cumulative proportion: amount of variance explained by that component and all those before it
+
+pca$loadings[, 1:4]
+
+# visualize with scree plot - possibly 2 factors?
+fviz_eig(pca, addlabels = TRUE)
+
+# Biplot
+fviz_pca_var(pca, col.var = "black")
+
+# Contribution of each variable
+```
+
+
+```{r, factor analysis with 4 factors}
+fa.parallel(mc2_corr, fa = "fa")
+# start with 4 factors to replicate Berry and Jones et al.
+efa <- factanal(x = mc2_corr, factors = 4, 
+                rotation = "varimax", 
+                scores = "regression")
+
+# 1 factor: 22.6% of variance explained
+# 2 factors: 33.2% of variance explained
+# 3 factors: 37.5% of variance explained
+# 4 factors: 41.6% of variance explained
+# 5 factors: 44.5% of variance explained
+# 6 factors: 46.9% of variance explained
+# 7 factors: 49.9% of variance explained
+# 8 factors: 53.7% of variance explained
+# 9 factors: 55.2% of variance explained
+# 10 factors: 60.6% of variance explained
+# 11 factors: 60.0% of variance explained
+
+# isolate factor scores
+factor_scores <- as.data.frame(efa$scores)
+
+# add factor scores into main dataset
+mc2_with_factor <- cbind(mc2_corr, factor_scores)
+
+# find dominant factor
+mc2_with_factor$dominant_factor <- apply(
+  mc2_with_factor[,c("Factor1","Factor2","Factor3","Factor4")],
+  1,
+  function(x) paste0("F", which.max(abs(x)))
+)
+
+
+loadings <- efa$loadings
+loadings
+
+### Eigenvalues 
+# Calculate correlation matrix
+cor_matrix <- cor(mc2_corr, use = "pairwise.complete.obs")
+
+# Compute eigenvalues
+eigen_vals <- eigen(cor_matrix)
+eigen_vals$values
+```
+
+
+```{r, distribution of factor scores by highest adult child educ}
+# get rid of observations missing any parental experience variable from original dataset
+mc2_no_miss <- mc2 %>% filter(!(is.na(pss1_mc2) | is.na(pss2_mc2) | is.na(pss3_mc2) |
+                              is.na(pss4_mc2) | is.na(pss5_mc2) | is.na(pss6_mc2) |
+                              is.na(pss7_mc2) | is.na(pss8_mc2) | is.na(pss9_mc2) |
+                              is.na(pss10_mc2) | is.na(pss11_mc2) | is.na(pss12_mc2) |
+                              is.na(pss13_mc2) | is.na(pss14_mc2) | is.na(pss15_mc2) |
+                              is.na(pss16_mc2) | is.na(pss17_mc2) | is.na(pss18_mc2)))
+
+# combine with dataset containing factors
+mc2_no_miss <- cbind(mc2_no_miss, mc2_with_factor)
+
+## larger categorization of adult child education
+mc2_no_miss %>% filter(larger_adch_educ == "High School") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(larger_adch_educ == "Technical School") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(larger_adch_educ == "Some College") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(larger_adch_educ == "Current College") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(larger_adch_educ == "College Grad") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(larger_adch_educ == "More than college") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(larger_adch_educ == "Unknown") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(is.na(larger_adch_educ)) %>% group_by(dominant_factor) %>% count()
+
+
+## smaller categorization of adult child education
+mc2_no_miss %>% filter(shorter_adch_educ == "High School") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(shorter_adch_educ == "Technical School") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(shorter_adch_educ == "College") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(shorter_adch_educ == "Unknown") %>% group_by(dominant_factor) %>% count()
+mc2_no_miss %>% filter(is.na(shorter_adch_educ)) %>% group_by(dominant_factor) %>% count()
+```
+
+```{r}
+mc2_no_miss %>% group_by(dominant_factor) %>% count()
+
+# Plot distribution of dominant factor
+ggplot(data = mc2_no_miss, aes(x = dominant_factor)) + 
+  geom_bar(aes(fill= dominant_factor)) +
+  theme_minimal(base_size = 10) +
+  labs(y = "Number of women", x = "Dominant Factor") +
+  scale_x_discrete(labels = c("Parental Stressors", "Parental Rewards", "Lack of Control", "Parental Satisfaction")) +
+  geom_text(
+    aes(label = after_stat(count), y = after_stat(count)),
+    stat = "count",
+    vjust = -0.5,
+    color = "black") +
+  theme(legend.position = "none")
+```
+
+
+```{r, factor analysis with 7 factors}
+# 7 factors which explain 49.9% of variance and result in p-value of 0.216 (7 factors are sufficient)
+efa <- factanal(x = mc2_corr, factors = 7, 
+                rotation = "varimax", 
+                scores = "regression")
+
+loadings <- efa$loadings
+loadings
+```
+
+
+```{r, functional social support scale}
+mc2 %>% select(fssq1_mc2, fssq2_mc2, fssq3_mc2, fssq4_mc2,
+               fssq5_mc2, fssq6_mc2, fssq7_mc2, fssq8_mc2,
+               fssqsum_mc2)
+
+# Manually calculate sum of FSSQ scores
+mc2 <- mc2 %>% mutate(fssq_sum_manual = fssq1_mc2 + fssq2_mc2 + fssq3_mc2 + 
+                                        fssq4_mc2 + fssq5_mc2 + fssq6_mc2 + 
+                                        fssq7_mc2 + fssq8_mc2)
+# Average FSSQ score
+# higher score = higher perceived social support
+mc2 <- mc2 %>% mutate(avg_fssq = fssqsum_mc2/8)
+
+mc2 %>% group_by(avg_fssq) %>% count()
+
+ggplot(data = mc2, aes(x = avg_fssq)) + 
+  geom_histogram(col = "white") + 
+  theme_minimal(base_size = 10) + 
+  labs(x = "Average FSSQ Score")
+
+mc2 %>% filter(avg_fssq >= 4)
+mc2 %>% filter(is.na(avg_fssq))
+```
+
+
+```{r, factor analysis of FSSQ}
+# emotional vs. instrumental types of support
+```
+
+
+```{r, FSSQ in association with cognitive outcomes}
+# any natural cut off? 
+
+# FSSQ factors and cognitive performance (including age, education, marital status)
+```
+

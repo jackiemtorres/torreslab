@@ -1,0 +1,335 @@
+---
+title: "Ale_ACES_Code_Review"
+author: "Kelsey MacCuish"
+output: pdf_document
+---
+
+```{r, load libraries}
+library(haven)
+library(dplyr)
+library(ggplot2)
+library(broom)
+library(ggpubr)
+library(tidyverse)
+library(nnet)
+library(sjPlot)
+library(knitr)
+library(survival)
+library(tibble)
+library(lubridate)
+library(ggsurvfit)
+library(gtsummary)
+library(tidycmprsk)
+library(survminer)
+library(viridis)
+library(flextable)
+```
+
+
+```{r, read and clean data}
+# Read in data
+data <- read_dta("~/Desktop/Berkeley/CHAM MC/NEWEST DATA/kim_geiselzamora_01d.dta")
+#data <- read_dta("../../../Code/kim_geiselzamora_01d.dta")
+
+### Independent variables ###
+
+# Recategorize ACES (0, 1-3, 4+)
+data <- data %>% mutate(aces = ifelse(aces_tot_cat_m == 0, 0,
+                               ifelse(aces_tot_cat_m %in% c(1, 2, 3), 1, 2)))
+
+data %>% group_by(aces) %>% count()
+
+
+### Dependent variables ###
+
+# experience of hot flashes in last 2 weeks as binary variable
+data <- data %>% mutate(htflsh_yn = ifelse(htflsh_mc1 == 1, 0, 1))
+
+data %>% group_by(htflsh_yn) %>% count()
+
+# experience night sweats in last two weeks 
+data <- data %>% mutate(ntswt_yn = ifelse(ntswt_mc1 == 1, 0, 1))
+
+data %>% group_by(ntswt_yn) %>% count()
+
+# overall VMS experience in last two weeks
+data <- data %>% mutate(vms = ifelse(htflsh_yn == 1 | ntswt_yn == 1, 1, 0))
+
+
+# perimenopause
+data <- data %>%
+mutate(pm = case_when(
+mensirr_mc1 == 2 ~ 1,
+row_number() %in% c(1, 299, 320, 487, 62, 313, 379, 417, 461, 465) ~ 1, 
+mensirrsp_mc1 == TRUE ~ 0, 
+TRUE ~ 0))
+
+data %>% group_by(pm) %>% count()
+
+
+# menopause
+data <- data %>% mutate(m = ifelse(menocat2_mc1 == 2, 1, 0))
+
+data %>% group_by(m) %>% count()
+
+
+# pre-menopause
+data <- data %>% mutate(prem = ifelse(menocat2_mc1 == 3, 0, 
+                               ifelse(pm == 0 & m == 0, 1, 0)))
+
+data %>% group_by(prem) %>% count()
+
+
+# Menopause status 
+data <- data %>% mutate(mstat = ifelse(prem == 1, 1,
+                                ifelse(pm == 1, 2,
+                                ifelse(m == 1, 3, NA))))
+
+data %>% group_by(mstat) %>% count()
+
+
+
+### Survival analysis variables ###
+data <- data %>% mutate(meno_event = ifelse(prem == 1 | pm == 1, 0, 
+                                     ifelse(m == 1, 1, NA)))
+
+data %>% group_by(meno_event) %>% count()
+
+# exit age = age at menopause or censoring
+data <- data %>% mutate(exit_age = ifelse(meno_event == 1, agmeno2_mc1, age_qx_mc1))
+
+
+# Covariates
+data <- data %>% mutate(country_mom = ifelse(country_mom == 1, 1, 2))
+
+data %>% group_by(country_mom) %>% count()
+```
+
+
+```{r, subset dataset and univariate distributions}
+# Subset dataset
+subset <- data %>% filter(!(is.na(aces) | is.na(age_qx_mc1) | is.na(depress_mc1) | is.na(educcat_mom) |
+                         is.na(exit_age) | is.na(gadscore_mc1) | is.na(htflsh_yn) |
+                         is.na(meno_event) | is.na(mstat) | is.na(country_mom) | is.na(ntswt_yn) | 
+                         is.na(vms)))
+
+# Check distributions
+table(subset$mstat, subset$htflsh_yn)
+table(subset$mstat, subset$ntswt_yn)
+table(subset$mstat, subset$vms)
+
+table(subset$htflsh_yn)
+table(subset$ntswt_yn)
+table(data$mstat)
+table(subset$mstat)
+table(subset$educcat_mom)
+table(subset$country_mom)
+table(subset$aces)
+
+# Mean and SD of age in each menopause status group
+subset %>% group_by(prem) %>% summarize(mean_age = mean(age_qx_mc1), 
+                                        sd_age = sd(age_qx_mc1))
+
+subset %>% group_by(pm) %>% summarize(mean_age = mean(age_qx_mc1), 
+                                      sd_age = sd(age_qx_mc1))
+
+subset %>% group_by(m) %>% summarize(mean_age = mean(age_qx_mc1),
+                                     sd_age = sd(age_qx_mc1))
+
+table(subset$mstat, subset$aces)
+```
+
+
+```{r, bivariate relationships}
+# make ACES a factor variable
+subset$aces <- as.factor(subset$aces)
+
+### ACES and menopause status ###
+table1 <- table(subset$aces, subset$mstat)
+chisq.test(table1)
+
+
+### ACES and hot flashes ###
+table2 <- table(subset$aces, subset$htflsh_yn)
+chisq.test(table2)
+
+
+### ACES and night sweats ###
+table3 <- table(subset$aces, subset$ntswt_yn)
+chisq.test(table3)
+
+
+### ACES and age ###
+tidy(lm(age_qx_mc1 ~ aces, data = subset)) # better to do a linear model since age is continuous
+
+
+### ACES and educational attainment ###
+table5 <- table(subset$aces, subset$educcat_mom)
+chisq.test(table5)
+
+
+### ACES and nativity ###
+table6 <- table(subset$aces, subset$country_mom)
+chisq.test(table6)
+
+
+### ACES and age at menopause ###
+tidy(lm(agmeno2_mc1 ~ aces, data = subset)) # linear model since age @ meno is continuous
+
+
+######## SHOULD ALSO LOOK AT BIVARIATE RELATIONSHIP BETWEEN EACH OUTCOME AND COVARIATE ########
+
+### Menopause status and age ###
+
+
+### Menopause status and educational attainment ###
+
+
+### Menopause status and nativity ###
+
+
+### Hot flashes and age ###
+
+
+### Hot flashes and educational attainment ###
+
+
+### Hot flashes and nativity ###
+
+
+### Night sweats and age ###
+
+
+### Night sweats and educational attainment ###
+
+
+### Night sweats and nativity ###
+
+
+### Age at menopause and age ### 
+# this is kind of strange because they're both age variables -- I would still take a peek at this though
+
+
+### Age at menopause and educational attainment ###
+
+
+### Age at menopause and nativity ###
+
+
+### Average age of menopause for postmenopausal participants ###
+subset %>% summarize(age_meno = mean(agmeno2_mc1, na.rm = T),
+                     sd_meno = sd(agmeno2_mc1, na.rm = T))
+```
+
+
+```{r, logistic regression models}
+## Logistic Regression - hot flashes as outcome
+hf <- glm(htflsh_yn ~ aces + age_qx_mc1 + educcat_mom + country_mom, 
+          data = subset, family = binomial)
+
+hfr <- tidy(hf, exponentiate = T, conf.int = T)
+
+tab_model(hf, transform = "exp", pred.labels = c("(Intercept)", "1-3 ACEs",
+          "4+ ACEs", "Age", "Educational Attainment", "Nativity"))
+
+## Logistic regression - night sweats
+ns <- glm(ntswt_yn ~ aces + age_qx_mc1 + educcat_mom + country_mom, data = subset, family = binomial)
+
+nsr <- tidy(ns, exponentiate = T, conf.int = T)
+
+tab_model(ns, transform = "exp", pred.labels = c("(Intercept)", "1-3 ACEs", "4+ ACEs",
+                                                 "Age", "Educational Attainment", "Nativity"))
+```
+
+
+```{r, multinomial regression for menopausal status?}
+
+```
+
+
+```{r, survival analysis for age at menopause}
+s1 <- survfit(Surv(exit_age, meno_event) ~ aces, data = subset)
+
+summary(s1)
+
+# KM curve
+ggsurvplot(s1, data = subset, conf.int = T, palette = c("#E69F00", "#009E73", "#999999"), xlim = c(40, 60))
+
+
+# log rank to test differences in groups
+survdiff(Surv(exit_age, meno_event) ~ aces, data = subset)
+
+
+# Cox PH model
+cox <- coxph(Surv(exit_age, meno_event) ~ aces + age_qx_mc1 + country_mom + educcat_mom, data = subset)
+summary(cox)
+
+# check PH assumption
+cox.zph(cox)
+```
+
+
+```{r, table 1}
+subset %>% summarize(mean_age = mean(age_qx_mc1),
+                     sd_age = sd(age_qx_mc1))
+
+subset %>% group_by(mstat) %>% count()
+
+subset %>% summarize(mean_meno = mean(agmeno2_mc1, na.rm = T),
+                     sd = sd(agmeno2_mc1, na.rm = T))
+
+subset %>% group_by(educcat_mom) %>% count()
+
+subset %>% group_by(country_mom) %>% count()
+
+subset %>% group_by(aces) %>% count()
+
+subset %>% group_by(vms) %>% count()
+
+subset %>% group_by(htflsh_yn) %>% count()
+
+subset %>% group_by(ntswt_yn) %>% count()
+```
+
+
+```{r, supplemental table 1}
+# Age
+subset %>% filter(mstat == 1) %>% summarize(mean = mean(age_qx_mc1), 
+                                            sd = sd(age_qx_mc1))
+
+subset %>% filter(mstat == 2) %>% summarize(mean = mean(age_qx_mc1), 
+                                            sd = sd(age_qx_mc1))
+
+subset %>% filter(mstat == 3) %>% summarize(mean = mean(age_qx_mc1), 
+                                            sd = sd(age_qx_mc1))
+
+# ACEs
+subset %>% filter(mstat == 1) %>% group_by(aces) %>% count()
+
+subset %>% filter(mstat == 2) %>% group_by(aces) %>% count()
+
+subset %>% filter(mstat == 3) %>% group_by(aces) %>% count()
+
+# VMs
+subset %>% filter(mstat == 1) %>% group_by(vms) %>% count()
+
+subset %>% filter(mstat == 2) %>% group_by(vms) %>% count()
+
+subset %>% filter(mstat == 3) %>% group_by(vms) %>% count()
+
+# hot flashes
+subset %>% filter(mstat == 1) %>% group_by(htflsh_yn) %>% count()
+
+subset %>% filter(mstat == 2) %>% group_by(htflsh_yn) %>% count()
+
+subset %>% filter(mstat == 3) %>% group_by(htflsh_yn) %>% count()
+
+# night sweats
+subset %>% filter(mstat == 1) %>% group_by(ntswt_yn) %>% count()
+
+subset %>% filter(mstat == 2) %>% group_by(ntswt_yn) %>% count()
+
+subset %>% filter(mstat == 3) %>% group_by(ntswt_yn) %>% count()
+```
+
+

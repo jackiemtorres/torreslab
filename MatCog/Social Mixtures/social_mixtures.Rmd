@@ -11,12 +11,31 @@ library(tableone)
 library(broom)
 library(ggplot2)
 library(tidyr)
+library(mice)
+library(corrplot)
+library(msm)
+library(RColorBrewer)
+library(purrr)
+library(stringr)
+library(emmeans)
+library(mitools) 
+library(corrplot)
+source("Functions_rmph.R")
+library(lmtp)
+library(mlr3extralearners)
+library(xgboost)
+library(lmtp)
+library(sl3)
+library(origami) 
+library(future)
+library(future.apply)
+set.seed(124)
 ```
 
 
 ## Read in data
 ```{r, read data}
-cham_all <- read_dta("../../../Code/torres_stressor_01i_nohsn.dta") # read in CHAMACOS data
+cham_all <- read_dta("../../../Code/torres_stressor_01j_nohsn.dta") # read in CHAMACOS data
 
 head(cham_all) # first 6 rows of dataset
 str(cham_all) # variables and variable types
@@ -30,7 +49,7 @@ names(cham_all) # names of variables
 ## Exposures: 
 # Poverty
 # Food insecurity
-# Household crowding (PPBR)
+# Household crowding (PPBR) (PPR for sensitivity)
 # Deportation worry
 # Chronic stressors (personal health problems, health problem in someone else, job difficulties, financial, relationships, taking care of friend/relative w/ health condition, parenting, natural disasters, COVID-19, something else)
 
@@ -43,15 +62,6 @@ names(cham_all) # names of variables
 # Verbal fluency
 # Global composition
 
-# Secondary: 
-# Cardiometabolic: 
-# Diabetes (self-report)
-# Fasting glucose and HbA1c
-# Hypertension (self-report and blood pressure)
-# BMI
-# Waist circumference
-
-
 ## Covariates: 
 # Age (baseline)
 # Education (baseline)
@@ -59,8 +69,6 @@ names(cham_all) # names of variables
 # Marital status (18-year, MatCog)
 # Employment status (MatCog)
 # Language of interview (MatCog)
-# Depression and anxiety (16-year, 18-year, MatCog)
-# Self-reported chronic health conditions (MatCog)
 ```
 
 
@@ -73,13 +81,16 @@ cham <- cham_all %>% mutate(povcat_mc1 = ifelse(povcat_mc1 == 1, "At or below po
                                      ifelse(povcat_mc1 == 2, "200% FPL",
                                      ifelse(povcat_mc1 == 3, ">=200% FPL", "Missing"))))
 
-cham <- cham %>% mutate(pov_binary = ifelse(is.na(povcat_mc1) | 
-                                            povcat_mc1 == "At or below poverty", 
-                                            "At or below poverty", "Above poverty"))
+cham <- cham %>% mutate(pov_binary = ifelse(povcat_mc1 == "At or below poverty", 
+                                            "At or below poverty", 
+                                     ifelse(povcat_mc1 %in% c("200% FPL", ">=200% FPL"), "Above poverty", NA)))
 
 # Food insecurity: ficat_mc1
 cham <- cham %>% mutate(ficat_mc1 = ifelse(ficat_mc1 == 1, "High security", 
                                     ifelse(ficat_mc1 == 2, "Low security", "Very low security")))
+
+# Binary food insecurity: fi_bin_mc1
+cham <- cham %>% mutate(fi_bin_mc1 = ifelse(ficat_mc1 == "High security", "Food secure", "Insecure"))
 
 # Household crowding: ppb2_mc1 and ppr_1
 # more than 2 people per bedroom: ppb2_mc1 
@@ -97,41 +108,70 @@ cham <- cham %>% mutate(wry_dep_mc1 = ifelse(wry_dep_mc1 == 1, "A lot",
                                       ifelse(wry_dep_mc1 == 2, "Some", 
                                       ifelse(wry_dep_mc1 == 3, "Not much", "Not at all"))))
 
+# Binary deportation worry: 
+cham <- cham %>% mutate(wry_bin_mc1 = ifelse(wry_dep_mc1 %in% c("Not much", "Not at all"), "No worry", "Worry"))
+
 # Chronic stress: personal health: stress_personal_health_mc1
-cham <- cham %>% mutate(stress_personal_health_mc1 = ifelse(stress1_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_personal_health_mc1 = ifelse(stress1_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: health problem in someone close to you: stress_other_health_mc1
-cham <- cham %>% mutate(stress_other_health_mc1 = ifelse(stress2_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_other_health_mc1 = ifelse(stress2_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: job: stress_job_mc1
 cham <- cham %>% mutate(stress_job_mc1 = ifelse(stress3_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: financial: stress_fin_mc1
-cham <- cham %>% mutate(stress_fin_mc1 = ifelse(stress4_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_fin_mc1 = ifelse(stress4_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: relationship: stress_relat_mc1
-cham <- cham %>% mutate(stress_relat_mc1 = ifelse(stress5_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_relat_mc1 = ifelse(stress5_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: taking care of someone with health condition: stress_take_care_mc1
-cham <- cham %>% mutate(stress_take_care_mc1 = ifelse(stress6_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_take_care_mc1 = ifelse(stress6_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: parenting: stress_parent_mc1
-cham <- cham %>% mutate(stress_parent_mc1 = ifelse(stress7_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_parent_mc1 = ifelse(stress7_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: natural disaster: stress_disaster_mc1
-cham <- cham %>% mutate(stress_disaster_mc1 = ifelse(stress8_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_disaster_mc1 = ifelse(stress8_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: COVID-19: stress_covid_mc1
-cham <- cham %>% mutate(stress_covid_mc1 = ifelse(stress9_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_covid_mc1 = ifelse(stress9_mc1 == 0, "No", "Yes"))
 
 # Chronic stress: something else: stress_else_mc1
-cham <- cham %>% mutate(stress_else_mc1 = ifelse(stress10_mc1 == 0, "No", "Yes"))
+#cham <- cham %>% mutate(stress_else_mc1 = ifelse(stress10_mc1 == 0, "No", "Yes"))
 
+# Chronic stress: count
+cham <- cham %>% mutate(stress_count_mc1 = #stress1_mc1 + stress2_mc1 + 
+                        stress3_mc1) #+ 
+                                       #stress4_mc1 + stress5_mc1 + stress6_mc1 + 
+                                       #stress7_mc1 + #stress8_mc1 + stress9_mc1 + 
+                                       #stress10_mc1)
+
+# Chronic stress: binary chronic stress
+cham <- cham %>% mutate(stress_bin_mc1 = ifelse(stress_count_mc1 == 0, "No", "Yes"))
 
 ## Covariates: 
 
 # Age at baseline: momdl_age
 cham %>% dplyr::select(momdl_age)
+
+# Parental education
+# if don't know both parents education -> Don't know/Don't remember
+# if don't know mom & dad never attended or don't know dad & mom never attended or neither attended -> None, never attended school
+# all others -> any formal education
+cham <- cham %>% mutate(parent_educ = 
+                        ifelse(medu_mc1 == 9 &
+                               fedu_mc1 == 9,
+                               "Dont know/dont remember",
+                        ifelse(medu_mc1 == 9 &
+                               fedu_mc1 == 1
+                               | medu_mc1 == 1 & 
+                               fedu_mc1 == 9 | 
+                               medu_mc1 == 1 & 
+                               fedu_mc1 == 1, 
+                               "No formal education",
+                               "any formal educ")))
                         
 # Education at baseline: educcat_mom
 cham <- cham %>% mutate(educcat_mom = ifelse(educcat_mom == 1, "<=6th grade", 
@@ -183,7 +223,7 @@ cham <- cham %>% mutate(ageusa_cat =
                         ifelse(ageusa_bl >= 18 & ageusa_bl < 25, "18-24",
                         ifelse(ageusa_bl >= 25, "25+", NA)))))
 
-# check age came to the us distribution among matcog participatns 
+# check age came to the us distribution among matcog participants 
 cham %>% filter(!is.na(age_qx_mc1)) %>% group_by(ageusa_cat) %>% count()
 
 
@@ -364,7 +404,7 @@ cham <- cham %>% mutate(summary_health = diab_mc1 + hbp_mc1 +
 # 1 health issue: 1, 1000
 # 2-5 health issues: 2-7, 1001, 1002, 2000
 # Missing: NA
-cham_tab1 <- cham_tab1 %>% mutate(summary_health_cat_yes = 
+cham <- cham %>% mutate(summary_health_cat_yes = 
                                  ifelse(summary_health == 0 | 
                                         summary_health == 999, "no health issues", 
                                  ifelse(summary_health == 1 |
@@ -379,18 +419,22 @@ cham <- cham %>% filter(!newid == 314)
 # select relevant variables for regression models
 cham_social <- cham %>% dplyr::select(newid, cham, qx_matcog,
                                       povcat_mc1, pov_binary,
-                                      ficat_mc1, ppb2_mc1, ppr_1, ppr_1_update,
-                                      wry_dep_mc1, stress_personal_health_mc1,
-                                      stress_other_health_mc1, stress_job_mc1, stress_fin_mc1, 
-                                      stress_relat_mc1, stress_take_care_mc1, stress_parent_mc1, 
-                                      stress_disaster_mc1, stress_covid_mc1, 
-                                      stress_else_mc1, # exposures
+                                      ficat_mc1, fi_bin_mc1, ppb2_mc1, ppr_1, ppr_1_update,
+                                      wry_dep_mc1, wry_bin_mc1, 
+                                      #stress_personal_health_mc1,
+                                      #stress_other_health_mc1, 
+                                      stress_job_mc1, 
+                                      #stress_fin_mc1, 
+                                      #stress_relat_mc1, stress_take_care_mc1, stress_parent_mc1, 
+                                      #stress_disaster_mc1, stress_covid_mc1, 
+                                      #stress_else_mc1, 
+                                      stress_count_mc1, stress_bin_mc1, # exposures
                                       memory_mc1, execfun_rc_mc1, verbal_rc_mc1,
                                       global_rc_mc1, execfun_tbex_mc1,
                                       global_tbex_mc1,
                                       tmtb_fail_mc1, # outcomes
                                       age_qx_mc1, momdl_age,
-                                      educcat_mom,
+                                      educcat_mom, parent_educ,
                                       ageusa_bl, ageusa_cat, ageusa_18,
                                       married, marstat_m18y,
                                       work_mc1, workc_mc1, lang_exam_mc1,
@@ -409,7 +453,2504 @@ cham_social <- cham %>% dplyr::select(newid, cham, qx_matcog,
                                       
 
 # MatCog participants
-cham_mc <- cham %>% filter(!is.na(age_qx_mc1))
+cham_mc <- cham_social %>% filter(!is.na(age_qx_mc1))
+
+# Check number of missing for each outcome, covariate, and exposure (Supplemental Appendix Table 1)
+cham_mc %>% filter(is.na(memory_mc1))
+cham_mc %>% filter(is.na(execfun_rc_mc1))
+cham_mc %>% filter(is.na(verbal_rc_mc1))
+cham_mc %>% filter(is.na(global_rc_mc1))
+
+cham_mc %>% filter(is.na(age_qx_mc1))
+cham_mc %>% filter(is.na(ageusa_cat))
+cham_mc %>% filter(is.na(married))
+cham_mc %>% filter(is.na(educcat_mom))
+cham_mc %>% filter(is.na(parent_educ))
+cham_mc %>% filter(is.na(work_mc1))
+cham_mc %>% filter(is.na(lang_exam_mc1))
+
+cham_mc %>% filter(is.na(stress_bin_mc1))
+cham_mc %>% filter(is.na(wry_bin_mc1))
+cham_mc %>% filter(is.na(ppb2_mc1))
+cham_mc %>% filter(is.na(fi_bin_mc1))
+cham_mc %>% filter(is.na(pov_binary))
+
+# Check how many people are missing each chronic stressor
+#cham_mc %>% group_by(stress_personal_health_mc1) %>% count() # 172
+#cham_mc %>% group_by(stress_other_health_mc1) %>% count() # 193
+cham_mc %>% group_by(stress_job_mc1) %>% count() # 106
+#cham_mc %>% group_by(stress_fin_mc1) %>% count() # 215
+#cham_mc %>% group_by(stress_relat_mc1) %>% count() # 134
+#cham_mc %>% group_by(stress_take_care_mc1) %>% count() # 93
+#cham_mc %>% group_by(stress_parent_mc1) %>% count() # 124
+#cham_mc %>% group_by(stress_else_mc1) %>% count()
+
+cham_mc %>% group_by(educcat_mom) %>% count()
+```
+
+
+```{r, check correlation between chronic stress variables}
+# 1 = personal health
+# 2 = health prob in someone close
+# 3 = job difficulties
+# 4 = financial
+# 5 = relationship
+# 6 = care taking for someone with health condition
+# 7 = parenting
+# 8 = natural disasters
+# 9 = COVID-19
+# 10 = something else
+
+cham_chron <- cham %>% mutate(pov_binary = ifelse(povcat_mc1 == "At or below poverty", 
+                                            "At or below poverty", 
+                                     ifelse(povcat_mc1 %in% c("200% FPL", ">=200% FPL"), "Above poverty", NA)))
+
+
+cham_chron <- cham_chron %>% select(#stress1_mc1, stress2_mc1, 
+                              stress3_mc1, #stress4_mc1, stress5_mc1, 
+                              #stress6_mc1, stress7_mc1, stress8_mc1, stress9_mc1, stress10_mc1,
+                              age_qx_mc1,
+                              povcat_mc1)
+
+cham_chron <- cham_chron %>% filter(!is.na(age_qx_mc1))
+
+cham_chron <- cham_chron %>% select(-age_qx_mc1)
+
+cham_chron <- cham_chron %>% mutate(#stress1_mc1 = as.numeric(stress1_mc1),
+                                    #stress2_mc1 = as.numeric(stress2_mc1),
+                                    stress3_mc1 = as.numeric(stress3_mc1),
+                                    #stress4_mc1 = as.numeric(stress4_mc1),
+                                    #stress5_mc1 = as.numeric(stress5_mc1),
+                                    #stress6_mc1 = as.numeric(stress6_mc1),
+                                    #stress7_mc1 = as.numeric(stress7_mc1),
+                                    #stress8_mc1 = as.numeric(stress8_mc1),
+                                    #stress9_mc1 = as.numeric(stress9_mc1),
+                                    #stress10_mc1 = as.numeric(stress10_mc1),
+                                    pov_binary = ifelse(povcat_mc1 == "At or below poverty" | is.na(povcat_mc1), 1, 0))
+
+cham_chron <- cham_chron %>% select(-povcat_mc1)
+
+#cham_chron_no_cov <- cham_chron %>% select(-stress9_mc1, -stress8_mc1)
+
+cham_chron <- cham_chron %>% na.omit()
+
+#cham_chron_no_cov <- cham_chron_no_cov %>% na.omit()
+
+# Create correlation matrix
+cor_chron <- cor(cham_chron)
+
+colnames(cor_chron) <- c(#"personal health", "health prob someone close", 
+                        "job", #"financial", "relationship", "care taking", "parenting",
+                         #"natural disasters", "COVID-19", "something else", 
+                        "poverty")
+
+rownames(cor_chron) <- c(#"personal health", "health prob someone close", 
+                        "job", #"financial", "relationship", "care taking", "parenting",
+                        #"natural disasters", "COVID-19", "something else", 
+                        "poverty")
+
+# Create correlogram
+corrplot(cor_chron, tl.col = "black")
+
+
+
+### Removing COVID-19 and natural disaster chronic stressors
+#cor_no_cov <- cor(cham_chron_no_cov)
+
+
+#colnames(cor_no_cov) <- c("personal health", "health prob someone close", "job", "financial", "relationship", "care taking", "parenting",
+                          #"something else", "poverty")
+
+#rownames(cor_no_cov) <- c("personal health", "health prob someone close", "job", "financial", "relationship", "care taking", "parenting",
+                          #"something else", "poverty")
+
+# Create correlogram
+#corrplot(cor_no_cov, tl.col = "black")
+```
+
+
+```{r, conduct multiple imputations}
+# Define exposure variables
+stressor_measures <- exposures <- c("stress_bin_mc1", "wry_bin_mc1", "ppb2_mc1", 
+                                    "fi_bin_mc1", "pov_binary")
+
+# Make exposure variables numeric
+cham_propen <- cham_mc %>% mutate(stress_bin_mc1 = ifelse(stress_bin_mc1 == "No", 0, 1),
+                              wry_bin_mc1 = ifelse(wry_bin_mc1 == "No worry", 0, 1),
+                              ppb2_mc1 = ifelse(ppb2_mc1 == "<=2", 0, 1),
+                              fi_bin_mc1 = ifelse(fi_bin_mc1 == "Food secure", 0, 1),
+                              pov_binary = ifelse(pov_binary == "Above poverty", 0, 1))
+
+# Create subset of data that includes variables of interest
+cham_propen <- cham_propen %>% dplyr::select(age_qx_mc1, ageusa_18, married, educcat_mom,
+                                  work_mc1, lang_exam_mc1,
+                                  stress_bin_mc1, wry_bin_mc1, ppb2_mc1, fi_bin_mc1, pov_binary,
+                                  memory_mc1, execfun_rc_mc1, verbal_rc_mc1, global_rc_mc1)
+
+cham_propen <- as.data.frame(cham_propen)
+cham_propen <- cham_propen %>% mutate(across(where(is.labelled), ~ as.factor(.)))
+imp <- mice(cham_propen, m = 30)
+
+# check that all missing values for covariates and exposures now have imputations
+imp$imp
+imp$method
+```
+
+
+```{r, table 1: descriptive statistics}
+imputed_exposures <- c("ppb2_mc1", "fi_bin_mc1", "pov_binary")
+
+# Calculate number of individuals where variable = 1 within each imputation
+counts <- sapply(imputed_exposures, function(var) {
+  sapply(1:30, function(i) {
+    df <- complete(imp, i)
+    sum(df[[var]] == 1, na.rm = TRUE)
+  })
+})
+
+
+# Make a dataframe of the number of individuals where variable = 1 for each imputed variable and for each of the 30 imputations
+counts <- as.data.frame(counts)
+counts$imputation <- 1:30
+counts <- counts %>% relocate(imputation)
+
+# Calculate averages across 30 imputations 
+sum(counts$ppb2_mc1)/30
+sum(counts$fi_bin_mc1)/30
+sum(counts$pov_binary)/30
+
+
+
+# Calculating proportions using Functions_rmph package
+rbind(mi.n.p(imp, "stress_bin_mc1"))
+rbind(mi.n.p(imp, "ppb2_mc1"))
+rbind(mi.n.p(imp, "fi_bin_mc1"))
+rbind(mi.n.p(imp, "wry_bin_mc1"))
+rbind(mi.n.p(imp, "pov_binary"))
+
+
+## Calculate average of continuous outcome within AND across each of the 30 imputations
+
+# Calculate average memory score within each dataset (should be the same for all datasets bc no values were missing)
+mean_mem <- with(imp, lm(memory_mc1~1))
+
+# Pool across datasets using Rubin's rule
+pooled_mem <- pool(mean_mem)
+summary(pooled_mem)
+
+# Calculating pooled mean, SE, SD manually
+imp.cham <- complete(imp, action = "long")
+MEAN <- tapply(imp.cham$memory_mc1, imp.cham$.imp, mean)
+VAR.MEAN <- tapply(imp.cham$memory_mc1, 
+                   imp.cham$.imp,
+                   var) / nrow(imp$data)
+
+
+SD <- tapply(imp.cham$memory_mc1,
+             imp.cham$.imp,
+             sd)
+
+cbind("MEAN" = MEAN,
+      "VAR.MEAN" = VAR.MEAN,
+      "SD" = SD)
+
+POOLED <- pool.scalar(MEAN,
+                      VAR.MEAN,
+                      nrow(imp$data))
+
+data.frame(pooled.mean = POOLED$qbar,
+           mean.var = POOLED$ubar,
+           btw.var = POOLED$b,
+           pooled.var = POOLED$t)
+
+
+# get pooled SE of the mean from pooled variance of the mean
+sqrt(POOLED$t)
+
+# SD: average within-imputation SD over imputations
+sum(SD)/30
+rbind(mi.mean.se.sd(imp, "memory_mc1"))
+sqrt((POOLED$ubar)*519)
+
+
+# Calculate average executive function score within each dataset
+mean_exec <- with(imp, lm(execfun_rc_mc1~1))
+pooled_exec <- pool(mean_exec)
+summary(pooled_exec)
+
+# SD
+sqrt(pooled_exec$pooled$ubar*519)
+rbind(mi.mean.se.sd(imp, "execfun_rc_mc1"))
+
+
+# Calculate average verbal fluency score within each dataset (should be the same for all datasets bc no values were missing)
+mean_verb <- with(imp, lm(verbal_rc_mc1~1))
+pooled_verb <- pool(mean_verb)
+summary(pooled_verb)
+
+# SD
+sqrt(pooled_verb$pooled$ubar*519)
+rbind(mi.mean.se.sd(imp, "verbal_rc_mc1"))
+
+
+# Calculate average global function score within each dataset
+mean_global <- with(imp, lm(global_rc_mc1~1))
+pooled_global <- pool(mean_global)
+summary(pooled_global)
+
+# SD
+sqrt(pooled_global$pooled$ubar*519)
+rbind(mi.mean.se.sd(imp, "global_rc_mc1"))
+
+
+# Calculate descriptive statistics for variables without missing values
+cham_propen %>% summarize(mean = mean(age_qx_mc1),
+                          sd = sd(age_qx_mc1))
+
+cham_propen %>% group_by(ageusa_18) %>% count()
+
+cham_propen %>% group_by(lang_exam_mc1) %>% count()
+
+cham_propen %>% group_by(educcat_mom) %>% count()
+
+cham_propen %>% group_by(married) %>% count()
+
+cham_propen %>% group_by(work_mc1) %>% count()
+
+
+# Calculate totals for exposures with missing values to compare to imputed datasets
+cham_propen %>% group_by(pov_binary) %>% count()
+cham_propen %>% group_by(fi_bin_mc1) %>% count()
+cham_propen %>% group_by(ppb2_mc1) %>% count()
+cham_propen %>% group_by(stress_bin_mc1) %>% count()
+```
+
+
+```{r, supplemental table 2: descriptive statistics of participant characteristics by individual exposure status}
+imputed_exposures <- c("stress_bin_mc1", "ppb2_mc1", "fi_bin_mc1", "pov_binary", "wry_bin_mc1")
+
+### Continuous variables
+
+## Exposure: Chronic stressors
+
+# Memory
+imp$data$stress_bin_mc1 <- factor(imp$data$stress_bin_mc1)
+fit <- with(imp, lm(memory_mc1 ~ stress_bin_mc1))
+emm <- emmeans(fit, ~ stress_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "memory_mc1", BY = "stress_bin_mc1"))
+
+
+# Executive function
+fit <- with(imp, lm(execfun_rc_mc1 ~ stress_bin_mc1))
+emm <- emmeans(fit, ~ stress_bin_mc1)
+summary(emm)
+
+# Note: you can calculate the SD by taking the variance of the mean multiplied by the sample size of the subset of the variable and taking the square root of that product
+# sqrt(var.mean*n_i)
+rbind(mi.mean.se.sd.by(imp, "execfun_rc_mc1", BY = "stress_bin_mc1"))
+
+
+# Verbal fluency
+fit <- with(imp, lm(verbal_rc_mc1 ~ stress_bin_mc1))
+emm <- emmeans(fit, ~ stress_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "verbal_rc_mc1", BY = "stress_bin_mc1"))
+
+
+# Global function
+fit <- with(imp, lm(global_rc_mc1 ~ stress_bin_mc1))
+emm <- emmeans(fit, ~ stress_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "global_rc_mc1", BY = "stress_bin_mc1"))
+
+
+# Age
+fit <- with(imp, lm(age_qx_mc1 ~ stress_bin_mc1))
+emm <- emmeans(fit, ~ stress_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "age_qx_mc1", BY = "stress_bin_mc1"))
+
+
+
+## Exposure: People per bedroom
+
+# Memory
+imp$data$ppb2_mc1 <- factor(imp$data$ppb2_mc1)
+fit <- with(imp, lm(memory_mc1 ~ ppb2_mc1))
+emm <- emmeans(fit, ~ ppb2_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "memory_mc1", BY = "ppb2_mc1"))
+
+
+# Executive function
+fit <- with(imp, lm(execfun_rc_mc1 ~ ppb2_mc1))
+emm <- emmeans(fit, ~ ppb2_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "execfun_rc_mc1", BY = "ppb2_mc1"))
+
+
+# Verbal fluency
+fit <- with(imp, lm(verbal_rc_mc1 ~ ppb2_mc1))
+emm <- emmeans(fit, ~ ppb2_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "verbal_rc_mc1", BY = "ppb2_mc1"))
+
+
+# Global function
+fit <- with(imp, lm(global_rc_mc1 ~ ppb2_mc1))
+emm <- emmeans(fit, ~ ppb2_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "global_rc_mc1", BY = "ppb2_mc1"))
+
+
+# Age
+fit <- with(imp, lm(age_qx_mc1 ~ ppb2_mc1))
+emm <- emmeans(fit, ~ ppb2_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "age_qx_mc1", BY = "ppb2_mc1"))
+
+
+
+## Exposure: Food insecurity
+
+# Memory
+imp$data$fi_bin_mc1 <- factor(imp$data$fi_bin_mc1)
+fit <- with(imp, lm(memory_mc1 ~ fi_bin_mc1))
+emm <- emmeans(fit, ~ fi_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "memory_mc1", BY = "fi_bin_mc1"))
+
+
+# Executive function
+fit <- with(imp, lm(execfun_rc_mc1 ~ fi_bin_mc1))
+emm <- emmeans(fit, ~ fi_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "execfun_rc_mc1", BY = "fi_bin_mc1"))
+
+
+# Verbal fluency
+fit <- with(imp, lm(verbal_rc_mc1 ~ fi_bin_mc1))
+emm <- emmeans(fit, ~ fi_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "verbal_rc_mc1", BY = "fi_bin_mc1"))
+
+
+# Global function
+fit <- with(imp, lm(global_rc_mc1 ~ fi_bin_mc1))
+emm <- emmeans(fit, ~ fi_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "global_rc_mc1", BY = "fi_bin_mc1"))
+
+
+# Age
+fit <- with(imp, lm(age_qx_mc1 ~ fi_bin_mc1))
+emm <- emmeans(fit, ~ fi_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "age_qx_mc1", BY = "fi_bin_mc1"))
+
+
+
+## Exposure: Poverty
+
+# Memory
+imp$data$pov_binary <- factor(imp$data$pov_binary)
+fit <- with(imp, lm(memory_mc1 ~ pov_binary))
+emm <- emmeans(fit, ~ pov_binary)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "memory_mc1", BY = "pov_binary"))
+
+
+# Executive function
+fit <- with(imp, lm(execfun_rc_mc1 ~ pov_binary))
+emm <- emmeans(fit, ~ pov_binary)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "execfun_rc_mc1", BY = "pov_binary"))
+
+
+# Verbal fluency
+fit <- with(imp, lm(verbal_rc_mc1 ~ pov_binary))
+emm <- emmeans(fit, ~ pov_binary)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "verbal_rc_mc1", BY = "pov_binary"))
+
+
+# Global function
+fit <- with(imp, lm(global_rc_mc1 ~ pov_binary))
+emm <- emmeans(fit, ~ pov_binary)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "global_rc_mc1", BY = "pov_binary"))
+
+
+# Age
+fit <- with(imp, lm(age_qx_mc1 ~ pov_binary))
+emm <- emmeans(fit, ~ pov_binary)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "age_qx_mc1", BY = "pov_binary"))
+
+
+
+## Exposure: Deportation worry
+
+# Memory
+imp$data$wry_bin_mc1 <- factor(imp$data$wry_bin_mc1)
+fit <- with(imp, lm(memory_mc1 ~ wry_bin_mc1))
+emm <- emmeans(fit, ~ wry_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "memory_mc1", BY = "wry_bin_mc1"))
+
+
+# Executive function
+fit <- with(imp, lm(execfun_rc_mc1 ~ wry_bin_mc1))
+emm <- emmeans(fit, ~ wry_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "execfun_rc_mc1", BY = "wry_bin_mc1"))
+
+
+# Verbal fluency
+fit <- with(imp, lm(verbal_rc_mc1 ~ wry_bin_mc1))
+emm <- emmeans(fit, ~ wry_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "verbal_rc_mc1", BY = "wry_bin_mc1"))
+
+
+# Global function
+fit <- with(imp, lm(global_rc_mc1 ~ wry_bin_mc1))
+emm <- emmeans(fit, ~ wry_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "global_rc_mc1", BY = "wry_bin_mc1"))
+
+
+# Age
+fit <- with(imp, lm(age_qx_mc1 ~ wry_bin_mc1))
+emm <- emmeans(fit, ~ wry_bin_mc1)
+summary(emm)
+
+rbind(mi.mean.se.sd.by(imp, "age_qx_mc1", BY = "wry_bin_mc1"))
+
+
+
+
+
+### Categorical variables
+
+## Nativity
+rbind(mi.n.p.by(imp, "stress_bin_mc1", BY = "ageusa_18"))
+rbind(mi.n.p.by(imp, "ppb2_mc1", BY = "ageusa_18"))
+rbind(mi.n.p.by(imp, "fi_bin_mc1", BY = "ageusa_18"))
+rbind(mi.n.p.by(imp, "pov_binary", BY = "ageusa_18"))
+rbind(mi.n.p.by(imp, "wry_bin_mc1", BY = "ageusa_18"))
+
+strat_var <- "ageusa_18"
+
+# Create summaries of counts of each exposure by stratification variable for all 30 imputations
+summary_list <- lapply(1:30, function(i) {
+  df <- complete(imp, i)
+
+  df %>%
+    group_by(.data[[strat_var]]) %>%
+    summarise(across(all_of(imputed_exposures), ~sum(.x == 1), .names = "1s_counts_of_{.col}"),
+              across(all_of(imputed_exposures), ~sum(.x == 0), .names = "0s_counts_of_{.col}")) %>%
+    mutate(imputation = i)
+})
+
+# Create a single dataset with all counts of each exposure by stratification variable for all 30 imputations
+all_counts <- bind_rows(summary_list)
+
+# Average exposures stratified by covariate across imputations (round to nearest integer)
+average_summary <- all_counts %>%
+  group_by(.data[[strat_var]]) %>%
+  summarise(across(starts_with("1s"), ~round(mean(.x))),
+            across(starts_with("0s"), ~round(mean(.x))))
+
+# Add column totals
+totals <- average_summary %>%
+  summarise(
+    across(starts_with("1s"), sum, .names = "total_{.col}"),
+    across(starts_with("0s"), sum, .names = "total_{.col}")
+  )
+
+# Add column totals to summary
+average_summary_with_totals <- average_summary %>%
+  bind_cols(totals[rep(1, nrow(average_summary)), ])
+
+# Calculate proportion of totals
+one_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^1s_")]
+zero_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^0s_")]
+
+for (col in one_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+for (col in zero_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+average_summary_with_props <- average_summary_with_totals %>% dplyr::select(-names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "total_")])
+average_summary_with_props
+
+
+
+## Language of assessment
+rbind(mi.n.p.by(imp, "stress_bin_mc1", BY = "lang_exam_mc1"))
+rbind(mi.n.p.by(imp, "ppb2_mc1", BY = "lang_exam_mc1"))
+rbind(mi.n.p.by(imp, "fi_bin_mc1", BY = "lang_exam_mc1"))
+rbind(mi.n.p.by(imp, "pov_binary", BY = "lang_exam_mc1"))
+rbind(mi.n.p.by(imp, "wry_bin_mc1", BY = "lang_exam_mc1"))
+
+strat_var <- "lang_exam_mc1"
+
+# Create summaries of counts of each exposure by stratification variable for all 30 imputations
+summary_list <- lapply(1:30, function(i) {
+  df <- complete(imp, i)
+
+  df %>%
+    group_by(.data[[strat_var]]) %>%
+    summarise(across(all_of(imputed_exposures), ~sum(.x == 1), .names = "1s_counts_of_{.col}"),
+              across(all_of(imputed_exposures), ~sum(.x == 0), .names = "0s_counts_of_{.col}")) %>%
+    mutate(imputation = i)
+})
+
+# Create a single dataset with all counts of each exposure by stratification variable for all 30 imputations
+all_counts <- bind_rows(summary_list)
+
+# Average exposures stratified by covariate across imputations (round to nearest integer)
+average_summary <- all_counts %>%
+  group_by(.data[[strat_var]]) %>%
+  summarise(across(starts_with("1s"), ~round(mean(.x))),
+            across(starts_with("0s"), ~round(mean(.x))))
+
+# Add column totals
+totals <- average_summary %>%
+  summarise(
+    across(starts_with("1s"), sum, .names = "total_{.col}"),
+    across(starts_with("0s"), sum, .names = "total_{.col}")
+  )
+
+# Add column totals to summary
+average_summary_with_totals <- average_summary %>%
+  bind_cols(totals[rep(1, nrow(average_summary)), ])
+
+# Calculate proportion of totals
+one_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^1s_")]
+zero_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^0s_")]
+
+for (col in one_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+for (col in zero_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+average_summary_with_props <- average_summary_with_totals %>% dplyr::select(-names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "total_")])
+average_summary_with_props
+
+
+
+## Educational attainment
+rbind(mi.n.p.by(imp, "stress_bin_mc1", BY = "educcat_mom"))
+rbind(mi.n.p.by(imp, "ppb2_mc1", BY = "educcat_mom"))
+rbind(mi.n.p.by(imp, "fi_bin_mc1", BY = "educcat_mom"))
+rbind(mi.n.p.by(imp, "pov_binary", BY = "educcat_mom"))
+rbind(mi.n.p.by(imp, "wry_bin_mc1", BY = "educcat_mom"))
+
+strat_var <- "educcat_mom"
+
+# Create summaries of counts of each exposure by stratification variable for all 30 imputations
+summary_list <- lapply(1:30, function(i) {
+  df <- complete(imp, i)
+
+  df %>%
+    group_by(.data[[strat_var]]) %>%
+    summarise(across(all_of(imputed_exposures), ~sum(.x == 1), .names = "1s_counts_of_{.col}"),
+              across(all_of(imputed_exposures), ~sum(.x == 0), .names = "0s_counts_of_{.col}")) %>%
+    mutate(imputation = i)
+})
+
+# Create a single dataset with all counts of each exposure by stratification variable for all 30 imputations
+all_counts <- bind_rows(summary_list)
+
+# Average exposures stratified by covariate across imputations (round to nearest integer)
+average_summary <- all_counts %>%
+  group_by(.data[[strat_var]]) %>%
+  summarise(across(starts_with("1s"), ~round(mean(.x))),
+            across(starts_with("0s"), ~round(mean(.x))))
+
+# Add column totals
+totals <- average_summary %>%
+  summarise(
+    across(starts_with("1s"), sum, .names = "total_{.col}"),
+    across(starts_with("0s"), sum, .names = "total_{.col}")
+  )
+
+# Add column totals to summary
+average_summary_with_totals <- average_summary %>%
+  bind_cols(totals[rep(1, nrow(average_summary)), ])
+
+# Calculate proportion of totals
+one_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^1s_")]
+zero_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^0s_")]
+
+for (col in one_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+for (col in zero_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+average_summary_with_props <- average_summary_with_totals %>% dplyr::select(-names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "total_")])
+average_summary_with_props
+
+
+
+## Marital status
+rbind(mi.n.p.by(imp, "stress_bin_mc1", BY = "married"))
+rbind(mi.n.p.by(imp, "ppb2_mc1", BY = "married"))
+rbind(mi.n.p.by(imp, "fi_bin_mc1", BY = "married"))
+rbind(mi.n.p.by(imp, "pov_binary", BY = "married"))
+rbind(mi.n.p.by(imp, "wry_bin_mc1", BY = "married"))
+
+strat_var <- "married"
+
+# Create summaries of counts of each exposure by stratification variable for all 30 imputations
+summary_list <- lapply(1:30, function(i) {
+  df <- complete(imp, i)
+
+  df %>%
+    group_by(.data[[strat_var]]) %>%
+    summarise(across(all_of(imputed_exposures), ~sum(.x == 1), .names = "1s_counts_of_{.col}"),
+              across(all_of(imputed_exposures), ~sum(.x == 0), .names = "0s_counts_of_{.col}")) %>%
+    mutate(imputation = i)
+})
+
+# Create a single dataset with all counts of each exposure by stratification variable for all 30 imputations
+all_counts <- bind_rows(summary_list)
+
+# Average exposures stratified by covariate across imputations (round to nearest integer)
+average_summary <- all_counts %>%
+  group_by(.data[[strat_var]]) %>%
+  summarise(across(starts_with("1s"), ~round(mean(.x))),
+            across(starts_with("0s"), ~round(mean(.x))))
+
+# Add column totals
+totals <- average_summary %>%
+  summarise(
+    across(starts_with("1s"), sum, .names = "total_{.col}"),
+    across(starts_with("0s"), sum, .names = "total_{.col}")
+  )
+
+# Add column totals to summary
+average_summary_with_totals <- average_summary %>%
+  bind_cols(totals[rep(1, nrow(average_summary)), ])
+
+# Calculate proportion of totals
+one_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^1s_")]
+zero_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^0s_")]
+
+for (col in one_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+for (col in zero_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+average_summary_with_props <- average_summary_with_totals %>% dplyr::select(-names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "total_")])
+average_summary_with_props
+
+
+
+## Employment status
+rbind(mi.n.p.by(imp, "stress_bin_mc1", BY = "work_mc1"))
+rbind(mi.n.p.by(imp, "ppb2_mc1", BY = "work_mc1"))
+rbind(mi.n.p.by(imp, "fi_bin_mc1", BY = "work_mc1"))
+rbind(mi.n.p.by(imp, "pov_binary", BY = "work_mc1"))
+rbind(mi.n.p.by(imp, "wry_bin_mc1", BY = "work_mc1"))
+
+strat_var <- "work_mc1"
+
+# Create summaries of counts of each exposure by stratification variable for all 30 imputations
+summary_list <- lapply(1:30, function(i) {
+  df <- complete(imp, i)
+
+  df %>%
+    group_by(.data[[strat_var]]) %>%
+    summarise(across(all_of(imputed_exposures), ~sum(.x == 1), .names = "1s_counts_of_{.col}"),
+              across(all_of(imputed_exposures), ~sum(.x == 0), .names = "0s_counts_of_{.col}")) %>%
+    mutate(imputation = i)
+})
+
+# Create a single dataset with all counts of each exposure by stratification variable for all 30 imputations
+all_counts <- bind_rows(summary_list)
+
+# Average exposures stratified by covariate across imputations (round to nearest integer)
+average_summary <- all_counts %>%
+  group_by(.data[[strat_var]]) %>%
+  summarise(across(starts_with("1s"), ~round(mean(.x))),
+            across(starts_with("0s"), ~round(mean(.x))))
+
+# Add column totals
+totals <- average_summary %>%
+  summarise(
+    across(starts_with("1s"), sum, .names = "total_{.col}"),
+    across(starts_with("0s"), sum, .names = "total_{.col}")
+  )
+
+# Add column totals to summary
+average_summary_with_totals <- average_summary %>%
+  bind_cols(totals[rep(1, nrow(average_summary)), ])
+
+# Calculate proportion of totals
+one_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^1s_")]
+zero_cols <- names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "^0s_")]
+
+for (col in one_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+for (col in zero_cols) {
+  total_col <- paste0("total_", col)
+  prop_col <- paste0("prop_", col)
+  average_summary_with_totals[[prop_col]] <- average_summary_with_totals[[col]] / average_summary_with_totals[[total_col]]
+}
+
+average_summary_with_props <- average_summary_with_totals %>% dplyr::select(-names(average_summary_with_totals)[str_detect(names(average_summary_with_totals), "total_")])
+average_summary_with_props
+```
+
+
+```{r, supplemental table 3: number of social stressors experienced and most common combination of hardships for each number experienced}
+# Get data from first imputation
+first_imp <- complete(imp, 1)
+
+# Make variables numeric
+first_imp <- first_imp %>% mutate(stress_bin_mc1 = as.numeric(stress_bin_mc1),
+                                  wry_bin_mc1 = as.numeric(wry_bin_mc1),
+                                  ppb2_mc1 = as.numeric(ppb2_mc1),
+                                  fi_bin_mc1 = as.numeric(fi_bin_mc1),
+                                  pov_binary = as.numeric(pov_binary),
+                                  stress_bin_mc1 = ifelse(stress_bin_mc1 == 2, 1, 0),
+                                  wry_bin_mc1 = ifelse(wry_bin_mc1 == 2, 1, 0),
+                                  ppb2_mc1 = ifelse(ppb2_mc1 == 2, 1, 0),
+                                  fi_bin_mc1 = ifelse(fi_bin_mc1 == 2, 1, 0),
+                                  pov_binary = ifelse(pov_binary == 2, 1, 0))
+
+
+# Find the most common social stressors observed from first imputation
+
+# Those who experienced no social stressors
+first_imp %>% group_by(fi_bin_mc1, ppb2_mc1, wry_bin_mc1, stress_bin_mc1, pov_binary) %>% count() # 26
+
+
+# Most common individual social stressor experienced
+first_imp %>% group_by(stress_bin_mc1) %>% count() # 106
+first_imp %>% group_by(wry_bin_mc1) %>% count() # 368
+first_imp %>% group_by(ppb2_mc1) %>% count() # 110
+first_imp %>% group_by(fi_bin_mc1) %>% count() # 208
+first_imp %>% group_by(pov_binary) %>% count() # 192
+
+
+# Most common pair of social stressors experienced together
+first_imp %>% group_by(pov_binary, fi_bin_mc1) %>% count() # 111
+first_imp %>% group_by(pov_binary, ppb2_mc1) %>% count() # 55
+first_imp %>% group_by(pov_binary, wry_bin_mc1) %>% count() # 147
+first_imp %>% group_by(pov_binary, stress_bin_mc1) %>% count() # 53
+first_imp %>% group_by(fi_bin_mc1, ppb2_mc1) %>% count() # 51
+first_imp %>% group_by(fi_bin_mc1, wry_bin_mc1) %>% count() # 168
+first_imp %>% group_by(fi_bin_mc1, stress_bin_mc1) %>% count() # 63
+first_imp %>% group_by(ppb2_mc1, wry_bin_mc1) %>% count() # 84
+first_imp %>% group_by(ppb2_mc1, stress_bin_mc1) %>% count() # 21
+first_imp %>% group_by(wry_bin_mc1, stress_bin_mc1) %>% count() # 84
+
+
+# 3 most common social stressors experienced together
+first_imp %>% group_by(pov_binary, fi_bin_mc1, ppb2_mc1) %>% count() # 35
+first_imp %>% group_by(pov_binary, fi_bin_mc1, wry_bin_mc1) %>% count() # 90
+first_imp %>% group_by(pov_binary, fi_bin_mc1, stress_bin_mc1) %>% count() # 42
+first_imp %>% group_by(pov_binary, ppb2_mc1, wry_bin_mc1) %>% count() # 44
+first_imp %>% group_by(pov_binary, ppb2_mc1, stress_bin_mc1) %>% count() # 12
+first_imp %>% group_by(pov_binary, wry_bin_mc1, stress_bin_mc1) %>% count() # 47
+first_imp %>% group_by(fi_bin_mc1, ppb2_mc1, wry_bin_mc1) %>% count() # 41
+first_imp %>% group_by(fi_bin_mc1, ppb2_mc1, stress_bin_mc1) %>% count() # 14
+first_imp %>% group_by(fi_bin_mc1, wry_bin_mc1, stress_bin_mc1) %>% count() # 53
+first_imp %>% group_by(ppb2_mc1, wry_bin_mc1, stress_bin_mc1) %>% count() # 18
+
+# poverty, food insec, household crowding
+# poverty, food insec, deportation worry
+# poverty, food insec, chronic stress
+# poverty, household crowding, deportation worry
+# poverty, household crowding, chronic stress
+# poverty, deportation worry, chronic stress
+# food insecurity, household crowding, deportation worry
+# food insecurity, household crowding, chronic stress
+# food insecurity, deportation worry, chronic stress
+# household crowding, deportation worry, chronic stress
+
+
+# 4 most common social stressors experienced together
+first_imp %>% group_by(pov_binary, fi_bin_mc1, ppb2_mc1, wry_bin_mc1) %>% count() # 28
+first_imp %>% group_by(pov_binary, fi_bin_mc1, ppb2_mc1, stress_bin_mc1) %>% count() # 11
+first_imp %>% group_by(pov_binary, ppb2_mc1, wry_bin_mc1, stress_bin_mc1) %>% count() # 11
+first_imp %>% group_by(pov_binary, fi_bin_mc1, wry_bin_mc1, stress_bin_mc1) %>% count() # 38
+first_imp %>% group_by(fi_bin_mc1, ppb2_mc1, wry_bin_mc1, stress_bin_mc1) %>% count() # 12
+
+# poverty, food insec, household crowding, deportation worry
+# poverty, food insec, household crowding, chronic stressors
+# poverty, household crowding, deportation worry, chronic stressors
+# poverty, food insec, deportation worry, chronic stressors
+# food insec, household crowding, deportation worry, chronic stressors
+
+
+# Those who experienced all social stressors
+first_imp %>% group_by(fi_bin_mc1, ppb2_mc1, wry_bin_mc1, stress_bin_mc1, pov_binary) %>% count() # 10
+
+
+
+
+# Average number of participants (over all imputations) who experienced no social stressors
+common_no_vars <- c("stress_bin_mc1", "wry_bin_mc1", "fi_bin_mc1", "pov_binary", "ppb2_mc1")
+
+counts <- numeric(imp$m)
+
+for (i in 1:imp$m) {
+  comp_dat <- complete(imp, i)
+  
+  counts[i] <- sum(rowSums(comp_dat[common_no_vars] == 0, na.rm = TRUE) == 0)
+}
+
+mean_count <- mean(counts)
+
+
+# Average number of participants (over all imputations) who experienced most common social stressor
+rbind(mi.n.p(imp, "wry_bin_mc1"))
+
+
+# Average number of participants (over all imputations) who experienced most common pair of social stressors
+rbind(mi.n.p.by(imp, "fi_bin_mc1", BY = "wry_bin_mc1"))
+
+
+# Average number of participants (over all imputations) who experienced 3 most common social stressors
+common_3_vars <- c("pov_binary", "wry_bin_mc1", "fi_bin_mc1")
+
+counts <- numeric(imp$m)
+
+for (i in 1:imp$m) {
+  comp_dat <- complete(imp, i)
+  
+  counts[i] <- sum(rowSums(comp_dat[common_3_vars] == 1, na.rm = TRUE) == 3)
+}
+
+mean_count <- mean(counts)
+
+
+# Average number of participants (over all imputations) who experienced 4 most common social stressors
+common_4_vars <- c("stress_bin_mc1", "wry_bin_mc1", "fi_bin_mc1", "pov_binary")
+
+counts <- numeric(imp$m)
+
+for (i in 1:imp$m) {
+  comp_dat <- complete(imp, i)
+  
+  counts[i] <- sum(rowSums(comp_dat[common_4_vars] == 1, na.rm = TRUE) == 4)
+}
+
+mean_count <- mean(counts)
+
+
+# Average number of participants (over all imputations) who experience all social stressors
+common_all_vars <- c("stress_bin_mc1", "wry_bin_mc1", "fi_bin_mc1", "pov_binary", "ppb2_mc1")
+
+counts <- numeric(imp$m)
+
+for (i in 1:imp$m) {
+  comp_dat <- complete(imp, i)
+  
+  counts[i] <- sum(rowSums(comp_dat[common_all_vars] == 1, na.rm = TRUE) == 5)
+}
+
+mean_count <- mean(counts)
+
+```
+
+
+```{r, supplemental figure 1: plot correlation matrix}
+# Get data from first imputation
+cor_data <- complete(imp, 1)
+
+# Remove outcomes from first imputed dataset used for correlation matrix
+cor_data <- cor_data %>% select(-memory_mc1, -execfun_rc_mc1, -verbal_rc_mc1, -global_rc_mc1)
+                                #-age_qx_mc1)
+                                #-ageusa_18, -married, -educcat_mom, -work_mc1, -lang_exam_mc1)
+
+# Make variables numeric
+cor_data <- cor_data %>% mutate(ageusa_18 = ifelse(ageusa_18 == "0", 0,
+                                            ifelse(ageusa_18 == "<18", 1, 2)),
+                                married = ifelse(married == "not married", 0, 1),
+                                educcat_mom = ifelse(educcat_mom == "<=6th grade", 0,
+                                              ifelse(educcat_mom == "7-11th grade", 1, 2)),
+                                work_mc1 = ifelse(work_mc1 == "Did not work since last visit", 0, 1),
+                                lang_exam_mc1 = ifelse(lang_exam_mc1 == "English", 0, 1),
+                                stress_bin_mc1 = as.numeric(stress_bin_mc1),
+                                wry_bin_mc1 = as.numeric(wry_bin_mc1),
+                                ppb2_mc1 = as.numeric(ppb2_mc1),
+                                fi_bin_mc1 = as.numeric(fi_bin_mc1),
+                                pov_binary = as.numeric(pov_binary))
+
+# Change order of variables
+cor_data <- cor_data %>% select(pov_binary, fi_bin_mc1, ppb2_mc1, wry_bin_mc1, stress_bin_mc1,
+                                age_qx_mc1, ageusa_18, married, educcat_mom, work_mc1, lang_exam_mc1)
+
+
+# Create correlation matrix
+cor_mat <- cor(cor_data)
+
+colnames(cor_mat) <- c("Low Household Income", "Food Insecurity", "Household Crowding", "Deportation Worry", "Job Stress",
+                       "Age", "Nativity", "Marital Status", "Education Level", "Employment Status", "Language")
+
+rownames(cor_mat) <- c("Low Household Income", "Food Insecurity", "Household Crowding", "Deportation Worry", "Job Stress",
+                       "Age", "Nativity", "Marital Status", "Education Level", "Employment Status", "Language")
+# Create correlogram
+corrplot(cor_mat, tl.col = "black")
+```
+
+
+```{r, estimate individual exposure propensity scores}
+# Calculate propensity scores for individuals in ith imputed dataset
+# j = exposure
+# prediction = probability of being exposed to jth stressor given covariate values
+
+pscore <- function(i, j) {
+df_t <- mice::complete(imp, i)
+  x <- predict(with(df_t, glm(get(stressor_measures[j]) ~ age_qx_mc1 + ageusa_18 + married + educcat_mom +
+                              work_mc1 + lang_exam_mc1, family = "binomial")), type = "response")
+ return(x)
+}
+
+include <- list()
+
+for (j in 1:length(stressor_measures)) {
+  
+# calculate propensity scores for each imputed dataset 
+pscores_list <- lapply(1:30, function(x) pscore(x, j))
+pscores <- do.call(cbind, pscores_list) 
+
+# make matrix of exposure levels for each imputed dataset 
+observed_ls <- lapply(1:30, function(x) mice::complete(imp, x) %>% dplyr::select(stressor_measures[j]))
+observed_e <- do.call(cbind, observed_ls)
+
+# find the minimum of propensity scores for people who were exposed
+# and the maximum of propensity scores for people who were unexposed 
+# to ensure there is adequate support 
+
+pscores_support_ls <- lapply(1:30, function(x) cbind(min(pscores[,x][observed_e[,x] == 1]), max(pscores[,x][observed_e[,x]==0])))
+
+pscores_support <- do.call(rbind, pscores_support_ls)
+
+# identify whether propensity scores are within the area of support for each imputed dataset 
+include_ls <- lapply(1:30, function(x) as.numeric(pscores[,x] >= pscores_support[x,1] & pscores[,x] <= pscores_support[x,2]))
+
+include[[j]] <- do.call(cbind, include_ls)
+}
+
+names(include) <- stressor_measures
+```
+
+
+```{r, estimate association with cognitive outcome for individual exposures}
+#### Memory composite ####
+
+# Conduct g-computation on each imputed dataset
+gcomp_mi <- function(m, exposure) {
+
+df_p <- mice::complete(imp, m)
+
+# Include those who fell within the area of support for each imputed data set 
+df_p <- df_p %>% filter(include[[exposure]][,m]==1)
+
+df_p$exposure <- df_p[[exposure]]
+fit <- glm(memory_mc1 ~ exposure + age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1, data = df_p)
+nobs <- nobs(fit)
+
+# Calculate the ATE via just the beta coefficient -- this works because it's a linear model 
+exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+ate <- coef(fit)[exposure_name] 
+
+cov <- vcov(fit)
+cov <- cov[exposure_name, exposure_name]
+
+results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules
+all_results_mem <- data.frame(matrix(ncol = 5, nrow = length(exposures)))
+
+for (i in 1:length(exposures)) {
+
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_mem[i,] <- results 
+}
+
+rownames(all_results_mem) <- exposures
+colnames(all_results_mem) <-  c("rd","var","lb","ub","N")
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_mem <- cbind(all_results_mem, exp_col_name)
+
+all_results_mem <- as.data.frame(all_results_mem)
+
+all_results_mem <- all_results_mem %>% mutate(Outcome = "Memory Composite",
+                                              Type = "Individual")
+
+
+
+
+#### Executive function ####
+
+# Conduct g-computation on each imputed dataset
+gcomp_mi <- function(m, exposure) {
+
+df_p <- mice::complete(imp, m)
+
+# Include those who fell within the area of support for each imputed data set 
+df_p <- df_p %>% filter(include[[exposure]][,m]==1)
+
+df_p$exposure <- df_p[[exposure]]
+fit <- glm(execfun_rc_mc1 ~ exposure + age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1, data = df_p)
+nobs <- nobs(fit)
+
+# Calculate the ATE via just the beta coefficient -- this works because it's a linear model 
+exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+ate <- coef(fit)[exposure_name] 
+
+cov <- vcov(fit)
+cov <- cov[exposure_name, exposure_name]
+
+results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules
+all_results_exec <- data.frame(matrix(ncol=5, nrow=length(exposures)))
+
+for (i in 1:length(exposures)) {
+
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_exec[i,] <- results 
+}
+
+rownames(all_results_exec) <- exposures
+colnames(all_results_exec) <-  c("rd","var","lb","ub","N")
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_exec <- cbind(all_results_exec, exp_col_name)
+
+all_results_exec <- as.data.frame(all_results_exec)
+
+all_results_exec <- all_results_exec %>% mutate(Outcome = "Executive Function",
+                                                Type = "Individual")
+
+
+
+
+#### Verbal fluency ####
+
+# Conduct g-computation on each imputed dataset
+gcomp_mi <- function(m, exposure) {
+
+df_p <- mice::complete(imp, m)
+
+# Include those who fell within the area of support for each imputed data set 
+df_p <- df_p %>% filter(include[[exposure]][,m]==1)
+
+df_p$exposure <- df_p[[exposure]]
+fit <- glm(verbal_rc_mc1 ~ exposure + age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1, data = df_p)
+nobs <- nobs(fit)
+
+# Calculate the ATE via just the beta coefficient -- this works because it's a linear model 
+exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+ate <- coef(fit)[exposure_name] 
+
+cov <- vcov(fit)
+cov <- cov[exposure_name, exposure_name]
+
+results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules
+all_results_verbal <- data.frame(matrix(ncol = 5, nrow = length(exposures)))
+
+for (i in 1:length(exposures)) {
+
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_verbal[i,] <- results 
+}
+
+rownames(all_results_verbal) <- exposures
+colnames(all_results_verbal) <-  c("rd","var","lb","ub","N")
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_verbal <- cbind(all_results_verbal, exp_col_name)
+
+all_results_verbal <- as.data.frame(all_results_verbal)
+
+all_results_verbal <- all_results_verbal %>% mutate(Outcome = "Verbal Fluency",
+                                                    Type = "Individual")
+
+
+
+
+#### Global function ####
+
+# Conduct g-computation on each imputed dataset
+gcomp_mi <- function(m, exposure) {
+
+df_p <- mice::complete(imp, m)
+
+# Include those who fell within the area of support for each imputed data set 
+df_p <- df_p %>% filter(include[[exposure]][,m]==1)
+
+df_p$exposure <- df_p[[exposure]]
+fit <- glm(global_rc_mc1 ~ exposure + age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1, data = df_p)
+nobs <- nobs(fit)
+
+# Calculate the ATE via just the beta coefficient -- this works because it's a linear model 
+exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+ate <- coef(fit)[exposure_name] 
+
+cov <- vcov(fit)
+cov <- cov[exposure_name, exposure_name]
+
+results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules
+all_results_global <- data.frame(matrix(ncol = 5, nrow = length(exposures)))
+
+for (i in 1:length(exposures)) {
+
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_global[i,] <- results 
+}
+
+rownames(all_results_global) <- exposures
+colnames(all_results_global) <-  c("rd","var","lb","ub","N")
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_global <- cbind(all_results_global, exp_col_name)
+
+all_results_global <- as.data.frame(all_results_global)
+
+all_results_global <- all_results_global %>% mutate(Outcome = "Global Function",
+                                                    Type = "Individual")
+
+# Combine all individual results into a single dataframe
+tot_results <- rbind(all_results_mem, all_results_exec, all_results_verbal, all_results_global)
+tot_results
+```
+
+
+```{r, supplemental figure 2: illustration of common support with propensity scores from first imputation for low household income}
+imp_1 <- mice::complete(imp, 1)  # Get first imputed dataset
+
+# Choose low household income as exposure
+exposure_var <- stressor_measures[5]
+
+# Fit the propensity score model
+pscore1 <- predict(glm(
+  formula = as.formula(paste0(exposure_var, " ~ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")),
+  data = imp_1,
+  family = "binomial"
+), type = "response")
+
+
+# Observed exposure values
+exposure_val <- imp_1[[exposure_var]]
+
+# Find area of common support
+min_exp <- min(pscores[exposure_val == 1], na.rm = TRUE)
+max_unexp <- max(pscores[exposure_val == 0], na.rm = TRUE)
+
+pscore_support <- c(min_exp, max_unexp)
+
+
+# Plot density curve
+ggplot(data = imp_1, aes(x = pscore1, fill = factor(exposure_val))) + 
+  geom_density(alpha = 0.4) + 
+  scale_fill_manual(values = c("0" = "red", "1" = "blue"),
+                    labels = c("Unexposed", "Exposed")) +
+  labs(x = "Estimated propensity score", y = "Density", fill = "") + 
+  geom_vline(xintercept = min_exp, linetype = "dashed") +
+  geom_vline(xintercept = max_unexp, linetype = "dashed") +
+  theme_minimal()
+```
+
+
+```{r, estimate mixture propensity scores - propensity scores for each exposure while controlling for the others}
+# Calculate propensity scores for individuals in ith imputed dataset
+# j = exposure
+# prediction = probability of being exposed to jth stressor given covariate values and other exposure values
+
+pscore_mix <- function(i, j) {
+  df_t <- mice::complete(imp, i)
+  exposure <- exposures[j]
+  
+  coexposures <- exposures[-(match(exposure, exposures))]
+  
+  # regress exposure of interest on other exposures plus covariates 
+  formula <- paste(exposure, "~",   paste(coexposures, collapse = "+ "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+  
+  
+  x <- predict(glm(formula = formula, data = df_t, family = "binomial"), type = "response")
+  return(x)
+}
+
+
+include_mix <- list()
+
+for (j in 1:length(exposures)) {
+  
+  # calculate propensity scores for each imputed data set 
+  pscores_list <- lapply(1:30, function(x) pscore_mix(x, j))
+  pscores_mix <- do.call(cbind, pscores_list) 
+  
+  # make matrix of exposure levels for each imputed data set 
+  observed_ls <- lapply(1:30, function(x) mice::complete(imp, x) %>% select(stressor_measures[j]))
+  observed_e <- do.call(cbind, observed_ls)
+  
+  # find the minimum of propensity scores for people who were exposed
+  # and the maximum of propensity scores for people who were unexposed 
+  # to ensure there is adequate support 
+  
+  pscores_support_ls <- lapply(1:30, function(x) cbind(min(pscores_mix[,x][observed_e[,x]==1]), max(pscores_mix[,x][observed_e[,x]==0])))
+  pscores_support_mix <- do.call(rbind, pscores_support_ls)
+  
+  # identify whether propensity scores are within the area of support for each imputed data set 
+  include_ls <- lapply(1:30, function(x) as.numeric(pscores_mix[,x] >= pscores_support_mix[x,1] & pscores_mix[,x]<= pscores_support_mix[x,2]))
+  
+  include_mix[[j]] <- do.call(cbind, include_ls)
+}
+
+names(include_mix) <- stressor_measures
+
+```
+
+
+```{r, estimate G-computation for cognitive outcome for individual exposures while controlling for other exposures}
+
+#### Memory composite ####
+gcomp_mi_mix <- function(m, exposure) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposure]][,m]==1)
+  
+  df_p$exposure <- df_p[[exposure]]
+
+  coexposures <- exposures[-(match(exposure, exposures))]
+  
+  
+  formula <- paste("memory_mc1 ~ exposure +", paste(coexposures, collapse = "+ "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+   
+  fit <- glm(formula, data = df_p)
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via the beta coefficient -- this works because it's a linear model 
+  exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+  
+  ate <- coef(fit)[exposure_name] 
+  
+  cov <- vcov(fit)
+  
+  cov <- cov[exposure_name, exposure_name]
+  
+  results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+  return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules
+all_results_mix_mem <- data.frame(matrix(ncol = 5, nrow = length(exposures)))
+
+for (i in 1:length(exposures)) {
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi_mix(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_mix_mem[i, ] <- results
+}
+
+rownames(all_results_mix_mem) <- exposures 
+colnames(all_results_mix_mem) <- c("rd","var","lb","ub","N")
+
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_mix_mem <- cbind(all_results_mix_mem, exp_col_name)
+
+all_results_mix_mem <- as.data.frame(all_results_mix_mem)
+
+all_results_mix_mem <- all_results_mix_mem %>% mutate(Outcome = "Memory Composite",
+                                                      Type = "Mutually Adjusted")
+
+
+
+
+#### Executive function ####
+gcomp_mi_mix <- function(m, exposure) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposure]][,m]==1)
+  
+  df_p$exposure <- df_p[[exposure]]
+
+  coexposures <- exposures[-(match(exposure, exposures))]
+  
+  
+  formula <- paste("execfun_rc_mc1 ~ exposure +", paste(coexposures, collapse = "+ "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+   
+  fit <- glm(formula, data = df_p)
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via the beta coefficient -- this works because it's a linear model 
+  exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+  
+  ate <- coef(fit)[exposure_name] 
+  
+  cov <- vcov(fit)
+  
+  cov <- cov[exposure_name, exposure_name]
+  
+  results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+  return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules  
+all_results_mix_exec <- data.frame(matrix(ncol = 5, nrow = length(exposures)))
+
+for (i in 1:length(exposures)) {
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi_mix(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_mix_exec[i, ] <- results
+}
+
+rownames(all_results_mix_exec) <- exposures 
+colnames(all_results_mix_exec) <- c("rd","var","lb","ub","N")
+
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_mix_exec <- cbind(all_results_mix_exec, exp_col_name)
+
+all_results_mix_exec <- as.data.frame(all_results_mix_exec)
+
+all_results_mix_exec <- all_results_mix_exec %>% mutate(Outcome = "Executive Function",
+                                                        Type = "Mutually Adjusted")
+
+
+
+
+#### Verbal fluency ####
+gcomp_mi_mix <- function(m, exposure) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposure]][,m]==1)
+  
+  df_p$exposure <- df_p[[exposure]]
+
+  coexposures <- exposures[-(match(exposure, exposures))]
+  
+  
+  formula <- paste("verbal_rc_mc1 ~ exposure +", paste(coexposures, collapse = "+ "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+   
+  fit <- glm(formula, data = df_p)
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via the beta coefficient -- this works because it's a linear model 
+  exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+  
+  ate <- coef(fit)[exposure_name] 
+  
+  cov <- vcov(fit)
+  
+  cov <- cov[exposure_name, exposure_name]
+  
+  results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+  return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules  
+all_results_mix_verbal <- data.frame(matrix(ncol = 5, nrow = length(exposures)))
+
+for (i in 1:length(exposures)) {
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi_mix(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_mix_verbal[i, ] <- results
+}
+
+rownames(all_results_mix_verbal) <- exposures 
+colnames(all_results_mix_verbal) <- c("rd","var","lb","ub","N")
+
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_mix_verbal <- cbind(all_results_mix_verbal, exp_col_name)
+
+all_results_mix_verbal <- as.data.frame(all_results_mix_verbal)
+
+all_results_mix_verbal <- all_results_mix_verbal %>% mutate(Outcome = "Verbal Fluency",
+                                                            Type = "Mutually Adjusted")
+
+
+
+
+#### Global function ####
+gcomp_mi_mix <- function(m, exposure) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposure]][,m]==1)
+  
+  df_p$exposure <- df_p[[exposure]]
+
+  coexposures <- exposures[-(match(exposure, exposures))]
+  
+  
+  formula <- paste("global_rc_mc1 ~ exposure +", paste(coexposures, collapse = "+ "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+   
+  fit <- glm(formula, data = df_p)
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via the beta coefficient -- this works because it's a linear model 
+  exposure_name <- grep("^exposure", names(coef(fit)), value = TRUE)
+  
+  ate <- coef(fit)[exposure_name] 
+  
+  cov <- vcov(fit)
+  
+  cov <- cov[exposure_name, exposure_name]
+  
+  results <- data.frame(cbind(ate = ate, var = cov, N = nobs)) 
+  return(results)
+}
+
+
+# Combine results across imputations using Rubin's combining rules
+all_results_mix_global <- data.frame(matrix(ncol = 5, nrow = length(exposures)))
+
+for (i in 1:length(exposures)) {
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+ate_M_ls <- lapply(1:30, function(x) gcomp_mi_mix(x, exposures[i]))
+ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+names(ate_M_df) <- c("ate", "var", "N")
+
+results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+results$lb <- results$rd - 1.96*sqrt(results$var)
+results$ub <- results$rd + 1.96*sqrt(results$var)
+results$N <- mean(ate_M_df$N)
+
+all_results_mix_global[i, ] <- results
+}
+
+rownames(all_results_mix_global) <- exposures 
+colnames(all_results_mix_global) <- c("rd","var","lb","ub","N")
+
+exp_col_name <- c("Chronic Stressors", "Deportation Worry", "Household Crowding", "Food Insecurity", "Low Household Income")
+all_results_mix_global <- cbind(all_results_mix_global, exp_col_name)
+
+all_results_mix_global <- as.data.frame(all_results_mix_global)
+
+all_results_mix_global <- all_results_mix_global %>% mutate(Outcome = "Global Function",
+                                                            Type = "Mutually Adjusted")
+
+# Combine all mutually adjusted results into one dataframe
+tot_results_mix <- rbind(all_results_mix_mem, all_results_mix_exec, all_results_mix_verbal, all_results_mix_global)
+```
+
+
+```{r, figure of differences in cognitive outcomes for individually and mutually adjusted social stressors}
+ind_mix_results <- rbind(tot_results, tot_results_mix)
+
+ind_mix_results$exp_col_name <- as.factor(ind_mix_results$exp_col_name)
+ind_mix_results$exp_col_name <- factor(ind_mix_results$exp_col_name, levels = c("Low Household Income", "Food Insecurity", "Household Crowding",
+                                                                                "Deportation Worry", "Chronic Stressors"))
+
+ggplot(data = ind_mix_results, aes(x = exp_col_name, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") + 
+  scale_x_discrete(labels = c("Low \n Household \n Income", "Food \n Insecurity", "Household \n Crowding", "Deportation \n Worry", "Chronic \n Stressors"))
+
+ind_mix_results <- ind_mix_results %>% rename(Exposure = exp_col_name)
+```
+
+
+```{r, estimate G-computation for cognitive outcomes for joint effect, all exposures at once}
+#### Memory composite ####
+gcomp_mi_joint <- function(m, ej) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposures_joint[[ej]][1]]][,m]==1 & include_mix[[exposures_joint[[ej]][2]]][,m]==1)
+  
+  coexposures <- exposures[-(match(exposures_joint[[ej]], exposures))]
+  
+  for (var in exposures_joint[[ej]]) {
+  df_p[[var]] <- as.numeric(as.character(df_p[[var]]))
+}
+  form <- paste("memory_mc1 ~ ", paste0(exposures_joint[[ej]], collapse = "*"), " +", paste(coexposures, collapse=" + "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+  
+  fit <- glm(form, data = df_p)
+  
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via sum of beta coefficients -- this works because it's a linear model 
+  ate <- sum(coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))])
+
+  # calculate the SE via the delta method 
+  cov <- vcov(fit)
+  cov <- cov[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":")),c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))]
+
+
+  
+  dm_var <- deltamethod(~ x1 + x2 + x3, 
+              mean = coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))], cov = cov, ses=T)^2
+
+  
+  results <- data.frame(cbind(ate = ate, var = dm_var, N = nobs)) 
+  return(results)
+}
+
+# combine results across imputations using Rubin's combining rules
+exposures_joint <- list(c("pov_binary", "fi_bin_mc1"),
+                        c("pov_binary", "ppb2_mc1"),
+                        c("pov_binary", "wry_bin_mc1"),
+                        c("pov_binary", "stress_bin_mc1"),
+                        c("fi_bin_mc1", "ppb2_mc1"),
+                        c("fi_bin_mc1", "wry_bin_mc1"),
+                        c("fi_bin_mc1", "stress_bin_mc1"),
+                        c("ppb2_mc1", "wry_bin_mc1"),
+                        c("ppb2_mc1", "stress_bin_mc1"),
+                        c("wry_bin_mc1", "stress_bin_mc1"))
+
+
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+
+all_results_joint_ls_mem <- list()
+
+for (ej in 1:length(exposures_joint)) {
+  ate_M_ls <- lapply(1:30, function(x) gcomp_mi_joint(x, ej))
+  ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+  names(ate_M_df) <- c("ate", "var", "N")
+  
+  results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+  results$lb <- results$rd - 1.96*sqrt(results$var)
+  results$ub <- results$rd + 1.96*sqrt(results$var)
+  
+  results$N <- mean(ate_M_df$N)
+
+  all_results_joint_ls_mem[[ej]] <- results 
+}
+
+all_results_joint_mem <- data.frame(do.call(rbind, all_results_joint_ls_mem)) 
+rownames(all_results_joint_mem) <- unlist(lapply(1:length(exposures_joint), function(x) paste0(exposures_joint[[x]], collapse=":")))
+
+pair_exp <- c("Low Household Income & Food Insecurity",
+              "Low Household Income & Household Crowding",
+              "Low Household Income & Deportation Worry",
+              "Low Household Income & Chronic Stressors",
+              "Food Insecurity & Household Crowding",
+              "Food Insecurity & Deportation Worry",
+              "Food Insecurity & Chronic Stressors",
+              "Household Crowding & Deportation Worry",
+              "Household Crowding & Chronic Stressors",
+              "Deportation Worry & Chronic Stressors")
+
+all_results_joint_mem <- all_results_joint_mem %>% mutate(Outcome = "Memory Composite",
+                                                          Exposure = pair_exp)
+
+
+
+
+#### Executive Function ####
+gcomp_mi_joint <- function(m, ej) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposures_joint[[ej]][1]]][,m]==1 & include_mix[[exposures_joint[[ej]][2]]][,m]==1)
+  
+  coexposures <- exposures[-(match(exposures_joint[[ej]], exposures))]
+  
+  for (var in exposures_joint[[ej]]) {
+  df_p[[var]] <- as.numeric(as.character(df_p[[var]]))
+}
+  form <- paste("execfun_rc_mc1 ~ ", paste0(exposures_joint[[ej]], collapse = "*"), " +", paste(coexposures, collapse=" + "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+  
+  fit <- glm(form, data = df_p)
+  
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via sum of beta coefficients -- this works because it's a linear model 
+  ate <- sum(coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))])
+
+  # calculate the SE via the delta method 
+  cov <- vcov(fit)
+  cov <- cov[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":")),c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))]
+
+
+  
+  dm_var <- deltamethod(~ x1 + x2 + x3, 
+              mean = coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))], cov = cov, ses=T)^2
+
+  
+  results <- data.frame(cbind(ate = ate, var = dm_var, N = nobs)) 
+  return(results)
+}
+
+# combine results across imputations using Rubin's combining rules
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+
+all_results_joint_ls_exec <- list()
+
+for (ej in 1:length(exposures_joint)) {
+  ate_M_ls <- lapply(1:30, function(x) gcomp_mi_joint(x, ej))
+  ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+  names(ate_M_df) <- c("ate", "var", "N")
+  
+  results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+  results$lb <- results$rd - 1.96*sqrt(results$var)
+  results$ub <- results$rd + 1.96*sqrt(results$var)
+  
+  results$N <- mean(ate_M_df$N)
+
+  all_results_joint_ls_exec[[ej]] <- results 
+}
+
+all_results_joint_exec <- data.frame(do.call(rbind, all_results_joint_ls_exec)) 
+rownames(all_results_joint_exec) <- unlist(lapply(1:length(exposures_joint), function(x) paste0(exposures_joint[[x]], collapse=":")))
+
+all_results_joint_exec <- all_results_joint_exec %>% mutate(Outcome = "Executive Function",
+                                                            Exposure = pair_exp)
+
+
+
+
+#### Verbal Fluency ####
+gcomp_mi_joint <- function(m, ej) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposures_joint[[ej]][1]]][,m]==1 & include_mix[[exposures_joint[[ej]][2]]][,m]==1)
+  
+  coexposures <- exposures[-(match(exposures_joint[[ej]], exposures))]
+  
+  for (var in exposures_joint[[ej]]) {
+  df_p[[var]] <- as.numeric(as.character(df_p[[var]]))
+}
+  form <- paste("verbal_rc_mc1 ~ ", paste0(exposures_joint[[ej]], collapse = "*"), " +", paste(coexposures, collapse=" + "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+  
+  fit <- glm(form, data = df_p)
+  
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via sum of beta coefficients -- this works because it's a linear model 
+  ate <- sum(coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))])
+
+  # calculate the SE via the delta method 
+  cov <- vcov(fit)
+  cov <- cov[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":")),c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))]
+
+
+  
+  dm_var <- deltamethod(~ x1 + x2 + x3, 
+              mean = coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))], cov = cov, ses=T)^2
+
+  
+  results <- data.frame(cbind(ate = ate, var = dm_var, N = nobs)) 
+  return(results)
+}
+
+# combine results across imputations using Rubin's combining rules
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+
+all_results_joint_ls_verbal <- list()
+
+for (ej in 1:length(exposures_joint)) {
+  ate_M_ls <- lapply(1:30, function(x) gcomp_mi_joint(x, ej))
+  ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+  names(ate_M_df) <- c("ate", "var", "N")
+  
+  results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+  results$lb <- results$rd - 1.96*sqrt(results$var)
+  results$ub <- results$rd + 1.96*sqrt(results$var)
+  
+  results$N <- mean(ate_M_df$N)
+
+  all_results_joint_ls_verbal[[ej]] <- results 
+}
+
+all_results_joint_verbal <- data.frame(do.call(rbind, all_results_joint_ls_verbal)) 
+rownames(all_results_joint_verbal) <- unlist(lapply(1:length(exposures_joint), function(x) paste0(exposures_joint[[x]], collapse=":")))
+
+all_results_joint_verbal <- all_results_joint_verbal %>% mutate(Outcome = "Verbal Fluency",
+                                                                Exposure = pair_exp)
+
+
+
+
+#### Global Function ####
+gcomp_mi_joint <- function(m, ej) {
+  
+  df_p <- mice::complete(imp, m)
+  
+  df_p <- df_p %>% filter(include_mix[[exposures_joint[[ej]][1]]][,m]==1 & include_mix[[exposures_joint[[ej]][2]]][,m]==1)
+  
+  coexposures <- exposures[-(match(exposures_joint[[ej]], exposures))]
+  
+  for (var in exposures_joint[[ej]]) {
+  df_p[[var]] <- as.numeric(as.character(df_p[[var]]))
+}
+  form <- paste("global_rc_mc1 ~ ", paste0(exposures_joint[[ej]], collapse = "*"), " +", paste(coexposures, collapse=" + "), "+ age_qx_mc1 + ageusa_18 + married + educcat_mom + work_mc1 + lang_exam_mc1")
+  
+  fit <- glm(form, data = df_p)
+  
+  nobs <- nobs(fit)
+  
+  # calculate the ATE via sum of beta coefficients -- this works because it's a linear model 
+  ate <- sum(coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))])
+
+  # calculate the SE via the delta method 
+  cov <- vcov(fit)
+  cov <- cov[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":")),c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))]
+
+
+  
+  dm_var <- deltamethod(~ x1 + x2 + x3, 
+              mean = coef(fit)[c(exposures_joint[[ej]], paste0(exposures_joint[[ej]], collapse=":"))], cov = cov, ses=T)^2
+
+  
+  results <- data.frame(cbind(ate = ate, var = dm_var, N = nobs)) 
+  return(results)
+}
+
+# combine results across imputations using Rubin's combining rules
+# variance calculations from https://amstat.tandfonline.com/doi/pdf/10.1080/01621459.1996.10476908?needAccess=true
+# var = average of complete data variances + variance of complete data means 
+
+all_results_joint_ls_global <- list()
+
+for (ej in 1:length(exposures_joint)) {
+  ate_M_ls <- lapply(1:30, function(x) gcomp_mi_joint(x, ej))
+  ate_M_df <- data.frame(do.call(rbind, ate_M_ls))
+  names(ate_M_df) <- c("ate", "var", "N")
+  
+  results <- data.frame(cbind(rd = mean(ate_M_df$ate), var = mean(ate_M_df$var) + ((30+1)/30)*var(ate_M_df$ate)))
+  results$lb <- results$rd - 1.96*sqrt(results$var)
+  results$ub <- results$rd + 1.96*sqrt(results$var)
+  
+  results$N <- mean(ate_M_df$N)
+
+  all_results_joint_ls_global[[ej]] <- results 
+}
+
+all_results_joint_global <- data.frame(do.call(rbind, all_results_joint_ls_global)) 
+rownames(all_results_joint_global) <- unlist(lapply(1:length(exposures_joint), function(x) paste0(exposures_joint[[x]], collapse=":")))
+
+all_results_joint_global <- all_results_joint_global %>% mutate(Outcome = "Global Function",
+                                                                Exposure = pair_exp)
+```
+
+
+```{r, plot pairwise results}
+joint_results <- rbind(all_results_joint_mem, all_results_joint_exec, all_results_joint_verbal, all_results_joint_global)
+
+#ind_mix_results$exp_col_name <- as.factor(ind_mix_results$exp_col_name)
+#ind_mix_results$exp_col_name <- factor(ind_mix_results$exp_col_name, levels = c("Low Household Income", "Food Insecurity", "Household Crowding",
+                                                                                #"Deportation Worry", "Chronic Stressors"))
+
+ggplot(data = joint_results, aes(x = rd, y = Exposure)) + 
+  geom_point() +
+  geom_errorbar(aes(xmin = lb, xmax = ub), width=.2) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  geom_vline(xintercept = 0, linetype = 'dotted') +
+  theme_minimal(base_size = 10) +
+  labs(x = "Difference in Cognitive Outcome Z-Scores", y = "")
+```
+
+
+```{r, supplemental figure 3: plot individual, mutually adjusted, and joint effects together}
+# Clean up individual, mutually adjusted, and joint dataframes to combine into single dataframe
+joint_results <- joint_results %>% mutate(Type = "Pairwise Adjustment")
+joint_results <- joint_results %>% select(rd, var, lb, ub, N, Exposure, Outcome, Type)
+
+
+#### Low Household Income & Food Insecurity ####
+pov_fi <- ind_mix_results %>% filter(Exposure %in% c("Low Household Income", "Food Insecurity"))
+
+pov_fi_joint <- joint_results %>% filter(Exposure == "Low Household Income & Food Insecurity")
+
+pov_fi <- rbind(pov_fi, pov_fi_joint)
+
+
+ggplot(data = pov_fi, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Low Household \n Income", "Food \n Insecurity", "Low Household Income & \n Food Insecurity")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Low Household Income & Household Crowding ####
+pov_crowd <- ind_mix_results %>% filter(Exposure %in% c("Low Household Income", "Household Crowding"))
+
+pov_crowd_joint <- joint_results %>% filter(Exposure == "Low Household Income & Household Crowding")
+
+pov_crowd <- rbind(pov_crowd, pov_crowd_joint)
+
+
+ggplot(data = pov_crowd, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Low Household \n Income", "Household \n Crowding", "Low Household Income & \n Household Crowding")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Low Household Income & Deportation Worry ####
+pov_wry <- ind_mix_results %>% filter(Exposure %in% c("Low Household Income", "Deportation Worry"))
+
+pov_wry_joint <- joint_results %>% filter(Exposure == "Low Household Income & Deportation Worry")
+
+pov_wry <- rbind(pov_wry, pov_wry_joint)
+
+
+ggplot(data = pov_wry, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Low Household \n Income", "Deportation \n Worry", "Low Household Income & \n Deportation Worry")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Low Household Income & Chronic Stressors ####
+pov_chron <- ind_mix_results %>% filter(Exposure %in% c("Low Household Income", "Chronic Stressors"))
+
+pov_chron_joint <- joint_results %>% filter(Exposure == "Low Household Income & Chronic Stressors")
+
+pov_chron <- rbind(pov_chron, pov_chron_joint)
+
+
+ggplot(data = pov_chron, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Low Household \n Income", "Chronic \n Stressors", "Low Household Income & \n Chronic Stressors")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Food Insecurity & Household Crowding ####
+fi_crowd <- ind_mix_results %>% filter(Exposure %in% c("Food Insecurity", "Household Crowding"))
+
+fi_crowd_joint <- joint_results %>% filter(Exposure == "Food Insecurity & Household Crowding")
+
+fi_crowd <- rbind(fi_crowd, fi_crowd_joint)
+
+
+ggplot(data = fi_crowd, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Food \n Insecurity", "Household \n Crowding", "Food Insecurity & \n Household Crowding")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Food Insecurity & Deportation Worry ####
+fi_wry <- ind_mix_results %>% filter(Exposure %in% c("Food Insecurity", "Deportation Worry"))
+
+fi_wry_joint <- joint_results %>% filter(Exposure == "Food Insecurity & Deportation Worry")
+
+fi_wry <- rbind(fi_wry, fi_wry_joint)
+
+
+ggplot(data = fi_wry, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Food \n Insecurity", "Deportation \n Worry", "Food Insecurity & \n Deportation Worry")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Food Insecurity & Chronic Stressors ####
+fi_chron <- ind_mix_results %>% filter(Exposure %in% c("Food Insecurity", "Chronic Stressors"))
+
+fi_chron_joint <- joint_results %>% filter(Exposure == "Food Insecurity & Chronic Stressors")
+
+fi_chron <- rbind(fi_chron, fi_chron_joint)
+
+
+ggplot(data = fi_chron, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Food \n Insecurity", "Chronic \n Stressors", "Food Insecurity & \n Chronic Stressors")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Household Crowding & Deportation Worry ####
+crowd_wry <- ind_mix_results %>% filter(Exposure %in% c("Household Crowding", "Deportation Worry"))
+
+crowd_wry_joint <- joint_results %>% filter(Exposure == "Household Crowding & Deportation Worry")
+
+crowd_wry <- rbind(crowd_wry, crowd_wry_joint)
+
+
+ggplot(data = crowd_wry, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Household \n Crowding", "Deportation \n Worry", "Household Crowding & \n Deportation Worry")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Household Crowding & Chronic Stressors ####
+crowd_chron <- ind_mix_results %>% filter(Exposure %in% c("Household Crowding", "Chronic Stressors"))
+
+crowd_chron_joint <- joint_results %>% filter(Exposure == "Household Crowding & Chronic Stressors")
+
+crowd_chron <- rbind(crowd_chron, crowd_chron_joint)
+
+
+ggplot(data = crowd_chron, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Household \n Crowding", "Chronic \n Stressors", "Household Crowding & \n Chronic Stressors")) + 
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+
+
+#### Deportation Worry & Chronic Stressors ####
+wry_chron <- ind_mix_results %>% filter(Exposure %in% c("Deportation Worry", "Chronic Stressors"))
+
+wry_chron_joint <- joint_results %>% filter(Exposure == "Deportation Worry & Chronic Stressors")
+
+wry_chron <- rbind(wry_chron, wry_chron_joint)
+
+
+ggplot(data = wry_chron, aes(x = Exposure, y = rd, group = Type)) + 
+  geom_point(aes(shape = Type, color = Type), position = position_dodge(.9)) +
+  geom_errorbar(aes(ymin = lb, ymax = ub, color = Type), width=.2,
+                 position = position_dodge(.9)) +
+  facet_wrap(~factor(Outcome, levels = c("Memory Composite", "Executive Function", 
+                                         "Verbal Fluency", "Global Function"))) +
+  theme_minimal(base_size = 10) +
+  geom_hline(yintercept = 0, linetype = 'dotted') +
+  theme(legend.position = "top") +
+  theme(legend.title = element_blank()) +
+  labs(x = "", y = "Difference in Cognitive Outcome Z-Scores") +
+  scale_x_discrete(labels = c("Deportation \n Worry", "Chronic \n Stressors", "Deportation Worry & \n Chronic Stressors")) +
+  scale_color_manual(values = c("red", "forestgreen", "blue3"))
+
+```
+
+
+```{r, causal-analysis-using-lmtp}
+# Make all exposures numeric for input into lmtp function
+cham_propen$stress_bin_mc1 <- as.numeric(cham_propen$stress_bin_mc1)
+cham_propen$pov_binary <- as.numeric(cham_propen$pov_binary)
+cham_propen$wry_bin_mc1 <- as.numeric(cham_propen$wry_bin_mc1)
+cham_propen$fi_bin_mc1 <- as.numeric(cham_propen$fi_bin_mc1)
+cham_propen$ppb2_mc1 <- as.numeric(cham_propen$ppb2_mc1)
+
+# create 30 imputations
+imp <- mice(cham_propen, m = 30)
+
+imputed_data <- lapply(1:30, function(i) mice::complete(imp, i))
+
+# set up exposure list
+A <- list("stress_bin_mc1", "wry_bin_mc1", "ppb2_mc1", "fi_bin_mc1", "pov_binary")
+
+# set up confounder vector
+confounders <- c("age_qx_mc1", "ageusa_18", "married", "educcat_mom", "work_mc1", "lang_exam_mc1")
+
+# set up learners 
+learners <- c("SL.mean", 
+              "SL.glm", 
+              "SL.gam", 
+              "SL.rpart", 
+              "SL.rpartPrune", 
+              "SL.step.interaction")
+
+
+
+
+#### MEMORY COMPOSITE OUTCOME ####
+run_lmtp_dataset <- function(data, A, confounders, learners_trt, learners_outcome) {
+  
+  # Shift functions
+  set_to_one <- function(a) {rep(1, length(a))}
+  
+  shift_factory <- function(exposure_name, shift_func) {
+  function(data, A_names) {
+    out <- vector("list", length(A_names))
+    names(out) <- A_names
+    
+    for (a in A_names) {
+      if (a == exposure_name) {
+        out[[a]] <- shift_func(data[[a]])  # Apply shift only to one exposure at a time
+      } else {
+        out[[a]] <- data[[a]]              # Other exposures remain the same
+      }
+    }
+    out
+  }
+  }
+  
+  shift_functions <- lapply(A, function(a) shift_factory(a, set_to_one))
+  names(shift_functions) <- A
+  
+  plan(multisession, workers = length(A))
+  
+  results <- future_lapply(seq_along(A), function(i) {
+  
+    lmtp_tmle(data = data, 
+              trt = A, 
+              outcome = "memory_mc1", 
+              baseline = confounders, 
+              shift = shift_functions[[i]],
+              mtp = TRUE,
+              outcome_type = "continuous",
+              learners_trt = learners_trt, 
+              learners_outcome = learners_outcome, 
+              folds = 1)
+})
+
+names(results) <- A
+return(results)
+
+}
+
+all_results <- lapply(imputed_data, function(dat){
+  run_lmtp_dataset(data = dat, 
+                   A = A, 
+                   confounders = confounders, 
+                   learners_trt = learners, 
+                   learners_outcome = learners)
+})
+
+
+# Extract estimates for executive function outcome
+ests_by_exposure_mem <- estimates(all_results, A)
+
+
+
+# Pool all results using Rubin's combing rules
+pooled_results_mem <- lapply(ests_by_exposure_mem, function(df) {
+  rubin_combine(df$estimate, df$se)
+}) |> bind_rows(.id = "exposure")
+
+pooled_results_mem <- pooled_results_mem %>% mutate(Outcome = "Memory Composite")
+
+
+
+
+#### EXECUTIVE FUNCTION OUTCOME ####
+run_lmtp_dataset <- function(data, A, confounders, learners_trt, learners_outcome) {
+  
+  # Shift functions
+  set_to_one <- function(a) {rep(1, length(a))}
+  
+  shift_factory <- function(exposure_name, shift_func) {
+  function(data, A_names) {
+    out <- vector("list", length(A_names))
+    names(out) <- A_names
+    
+    for (a in A_names) {
+      if (a == exposure_name) {
+        out[[a]] <- shift_func(data[[a]])  # Apply shift only to one exposure at a time
+      } else {
+        out[[a]] <- data[[a]]              # Other exposures remain the same
+      }
+    }
+    out
+  }
+  }
+  
+  shift_functions <- lapply(A, function(a) shift_factory(a, set_to_one))
+  names(shift_functions) <- A
+  
+  plan(multisession, workers = length(A))
+  
+  results <- future_lapply(seq_along(A), function(i) {
+  
+    lmtp_tmle(data = data, 
+              trt = A, 
+              outcome = "execfun_rc_mc1", 
+              baseline = confounders, 
+              shift = shift_functions[[i]],
+              mtp = TRUE,
+              outcome_type = "continuous",
+              learners_trt = learners_trt, 
+              learners_outcome = learners_outcome, 
+              folds = 1)
+})
+
+names(results) <- A
+return(results)
+
+}
+
+all_results <- lapply(imputed_data, function(dat){
+  run_lmtp_dataset(data = dat, 
+                   A = A, 
+                   confounders = confounders, 
+                   learners_trt = learners, 
+                   learners_outcome = learners)
+})
+
+
+# Extract estimates for executive function outcome
+ests_by_exposure_exec <- estimates(all_results, A)
+
+
+
+# Pool all results using Rubin's combing rules
+pooled_results_exec <- lapply(ests_by_exposure_exec, function(df) {
+  rubin_combine(df$estimate, df$se)
+}) |> bind_rows(.id = "exposure")
+
+pooled_results_exec <- pooled_results_exec %>% mutate(Outcome = "Executive Function")
+
+
+
+
+#### VERBAL FLUENCY OUTCOME ####
+run_lmtp_dataset <- function(data, A, confounders, learners_trt, learners_outcome) {
+  
+  # Shift functions
+  set_to_one <- function(a) {rep(1, length(a))}
+  
+  shift_factory <- function(exposure_name, shift_func) {
+  function(data, A_names) {
+    out <- vector("list", length(A_names))
+    names(out) <- A_names
+    
+    for (a in A_names) {
+      if (a == exposure_name) {
+        out[[a]] <- shift_func(data[[a]])  # Apply shift only to one exposure at a time
+      } else {
+        out[[a]] <- data[[a]]              # Other exposures remain the same
+      }
+    }
+    out
+  }
+  }
+  
+  shift_functions <- lapply(A, function(a) shift_factory(a, set_to_one))
+  names(shift_functions) <- A
+  
+  plan(multisession, workers = length(A))
+  
+  results <- future_lapply(seq_along(A), function(i) {
+  
+    lmtp_tmle(data = data, 
+              trt = A, 
+              outcome = "verbal_rc_mc1", 
+              baseline = confounders, 
+              shift = shift_functions[[i]],
+              mtp = TRUE,
+              outcome_type = "continuous",
+              learners_trt = learners_trt, 
+              learners_outcome = learners_outcome, 
+              folds = 1)
+})
+
+names(results) <- A
+return(results)
+
+}
+
+all_results <- lapply(imputed_data, function(dat){
+  run_lmtp_dataset(data = dat, 
+                   A = A, 
+                   confounders = confounders, 
+                   learners_trt = learners, 
+                   learners_outcome = learners)
+})
+
+
+# Extract estimates for executive function outcome
+ests_by_exposure_verbal <- estimates(all_results, A)
+
+
+
+# Pool all results using Rubin's combing rules
+pooled_results_verbal <- lapply(ests_by_exposure_verbal, function(df) {
+  rubin_combine(df$estimate, df$se)
+}) |> bind_rows(.id = "exposure")
+
+pooled_results_verbal <- pooled_results_verbal %>% mutate(Outcome = "Verbal Fluency")
+
+
+
+
+#### GLOBAL FUNCTION OUTCOME ####
+run_lmtp_dataset <- function(data, A, confounders, learners_trt, learners_outcome) {
+  
+  # Shift functions
+  set_to_one <- function(a) {rep(1, length(a))}
+  
+  shift_factory <- function(exposure_name, shift_func) {
+  function(data, A_names) {
+    out <- vector("list", length(A_names))
+    names(out) <- A_names
+    
+    for (a in A_names) {
+      if (a == exposure_name) {
+        out[[a]] <- shift_func(data[[a]])  # Apply shift only to one exposure at a time
+      } else {
+        out[[a]] <- data[[a]]              # Other exposures remain the same
+      }
+    }
+    out
+  }
+  }
+  
+  shift_functions <- lapply(A, function(a) shift_factory(a, set_to_one))
+  names(shift_functions) <- A
+  
+  plan(multisession, workers = length(A))
+  
+  results <- future_lapply(seq_along(A), function(i) {
+  
+    lmtp_tmle(data = data, 
+              trt = A, 
+              outcome = "global_rc_mc1", 
+              baseline = confounders, 
+              shift = shift_functions[[i]],
+              mtp = TRUE,
+              outcome_type = "continuous",
+              learners_trt = learners_trt, 
+              learners_outcome = learners_outcome, 
+              folds = 1)
+})
+
+names(results) <- A
+return(results)
+
+}
+
+all_results <- lapply(imputed_data, function(dat){
+  run_lmtp_dataset(data = dat, 
+                   A = A, 
+                   confounders = confounders, 
+                   learners_trt = learners, 
+                   learners_outcome = learners)
+})
+
+
+# Extract estimates for executive function outcome
+ests_by_exposure_global <- estimates(all_results, A)
+
+
+
+# Pool all results using Rubin's combing rules
+pooled_results_global <- lapply(ests_by_exposure_global, function(df) {
+  rubin_combine(df$estimate, df$se)
+}) |> bind_rows(.id = "exposure")
+
+pooled_results_global <- pooled_results_global %>% mutate(Outcome = "Global Function")
 ```
 
 

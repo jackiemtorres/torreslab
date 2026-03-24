@@ -1,0 +1,516 @@
+---
+title: "CHAMACOS Baseline and Mat Cog Data Comparisons"
+author: "Kelsey MacCuish"
+output: pdf_document
+---
+
+```{r read-in-data, include=FALSE}
+library(haven)
+library(tidyverse)
+
+# read in longitudinal data 
+long <- read_dta("../Code/mat_long_adversity_nohsn.dta")
+```
+
+
+```{r, data-cleaning}
+# yrsusa_matcog is years in the US at maternal cognition study visit 1
+long_tot <- long %>% mutate(age_came_back_to_us = age_qx_mc1 - yrsusa_matcog)
+
+# compare ageusa_bl with calculated age got back to the US
+long_tot %>% dplyr::select(age_qx_mc1, yrsusa_matcog, ageusa_bl, age_came_back_to_us) %>% filter(!is.na(age_qx_mc1))
+
+# if ageusa_bl is -9, participant was born in the US
+long_tot <- long_tot %>% mutate(ageusa_bl = ifelse(ageusa_bl == -9, 0, ageusa_bl))
+
+# if ageusa_bl is < 0, set to 0
+long_tot <- long_tot %>% mutate(ageusa_bl = ifelse(ageusa_bl < 0, 0, ageusa_bl))
+
+# if ageusa_bl is missing, and age_qx_mc1 = yrsusa_matcog, replace ageusa_bl with age_came_back_to_us
+# if age at survey = number of years lived in the US, person has lived in the US their whole life
+# i.e., they did not leave and come back to the US
+long_tot <- long_tot %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & 
+                                           age_qx_mc1 - yrsusa_matcog < 1, age_came_back_to_us, 
+                                                     ageusa_bl))
+
+# check instances where there are discrepancies between ageusa_bl and calculated age_came_back_to_us
+long_tot %>% filter(abs(ageusa_bl - age_came_back_to_us) > 2) %>% 
+  dplyr::select(newid, age_qx_mc1, yrsusa_matcog, ageusa_bl, age_came_back_to_us, country_mom)
+
+
+
+long_tot %>% filter(is.na(ageusa_bl)) %>% dplyr::select(newid, ageusa_bl, age_came_back_to_us,
+                                                    country_mom, age_qx_mc1, yrsusa_matcog)
+
+# set ageusa_bl to 0 for individuals with country_mom = 1 
+long_tot <- long_tot %>% mutate(ageusa_bl = ifelse(is.na(ageusa_bl) & country_mom == 1, 0, ageusa_bl))
+
+
+# categorize age came to the US variable 
+long_tot <- long_tot %>% mutate(ageusa_cat = 
+                        ifelse(country_mom == 1 | ageusa_bl == 0, "0",
+                        ifelse(ageusa_bl > 0 & ageusa_bl < 18, "<1-17", 
+                        ifelse(ageusa_bl >= 18 & ageusa_bl < 25, "18-24",
+                        ifelse(ageusa_bl >= 25, "25+", NA)))))
+```
+
+
+```{r, mat-cog-visit-1-demographics}
+# Subset to Mat Cog 1 sample
+mc1 <- long_tot %>% filter(complete_qx_mc1 == 1)
+
+# Mean and SD of age
+mc1 %>% summarize(mean = mean(age_qx_mc1),
+                  sd = sd(age_qx_mc1))
+
+# Nativity
+mc1 %>% group_by(ageusa_cat) %>% count()
+
+# Language
+mc1 %>% group_by(lang_qx_mc1) %>% count()
+
+# Education
+mc1 %>% group_by(educcat_mom) %>% count()
+
+# Marital status
+mc1 %>% group_by(marcat_mc1) %>% count()
+
+# Worked since last visit
+mc1 %>% group_by(work_mc1) %>% count()
+
+# Working now
+mc1 %>% group_by(workc_mc1) %>% count()
+
+# Poverty
+mc1 %>% group_by(povcat_mc1) %>% count()
+
+# Food Insecurity
+mc1 %>% group_by(ficat_mc1) %>% count()
+
+# Housing density
+mc1 %>% filter(!is.na(density1_mc1)) %>% summarize(mean = mean(density1_mc1),
+                  sd = sd(density1_mc1))
+
+# ACES
+mc1 %>% group_by(aces_tot_mc1) %>% count()
+
+mc1 %>% filter(is.na(aces_tot_mc1)) %>% group_by(aces_tot_m18y) %>% count()
+
+# Depression
+mc1 %>% group_by(depresscat_mc1) %>% count()
+
+# Anxiety
+mc1 %>% group_by(gad4cat_mc1) %>% count()
+
+# Number of people per household at Mat Cog
+mc1 %>% group_by(lvhome_n_mc1) %>% count()
+```
+
+
+```{r, mat-cog-visit-2-demographics}
+# Subset to Mat Cog 2
+mc2 <- long_tot %>% filter(complete_qx_mc2 == 1)
+
+# Mean and SD of age
+mc2 %>% summarize(mean = mean(age_qx_mc2),
+                  sd = sd(age_qx_mc2))
+
+# Nativity
+mc2 %>% group_by(ageusa_cat) %>% count()
+
+mc2 %>% filter(is.na(ageusa_cat)) %>% select(ageusa_bl, country_mom, yrsusa_matcog, age_came_back_to_us, age_qx_mc1)
+
+# Language
+mc2 %>% group_by(lang_qx_mc2) %>% count()
+
+# Education
+mc2 %>% group_by(educcat_mom) %>% count()
+
+# Marital status
+mc2 %>% group_by(marcat_mc2) %>% count()
+mc2$marcat_mc2
+
+# Worked since last visit
+mc2 %>% group_by(work_mc2) %>% count()
+mc2$work_mc2
+
+# Poverty
+mc2 %>% group_by(povcat_mc2) %>% count()
+mc2$povcat_mc2
+
+# Food Insecurity
+mc2 %>% group_by(ficat_mc2) %>% count()
+mc2$ficat_mc2
+
+# Housing density
+mc2 %>% filter(!is.na(density1_mc2)) %>% summarize(mean = mean(density1_mc2),
+                  sd = sd(density1_mc2))
+```
+
+
+```{r, poverty-comparisons}
+long_tot %>% group_by(povcat_mc1) %>% count();long_tot %>% group_by(povcat2_mc1) %>% count()
+
+long_tot %>% group_by(povcatbl) %>% count()
+
+long_tot %>% group_by(povcat_9y) %>% count()
+
+long_tot %>% group_by(povcat_mc1) %>% count()
+
+long_tot %>% group_by(povcat_mc2) %>% count()
+
+```
+
+
+```{r, food-insecurity-comparisons}
+long_tot %>% group_by(ficat_9y) %>% count()
+
+long_tot %>% group_by(ficat_mc1) %>% count()
+
+long_tot %>% group_by(ficat_mc2) %>% count()
+
+```
+
+
+```{r, household-crowding-comparisons}
+long_tot %>% group_by(dens1_cat_9y) %>% count()
+long_tot %>% group_by(dens1_cat_mc1) %>% count()
+long_tot %>% group_by(dens1_cat_mc2) %>% count()
+
+
+long_tot %>% group_by(ppb2_9y) %>% count()
+long_tot %>% group_by(ppb2_mc1) %>% count()
+long_tot %>% group_by(ppb2_mc2) %>% count()
+```
+
+
+```{r, job-stress-comparisons}
+long_tot %>% group_by(stress3_mc1) %>% count()
+long_tot %>% group_by(stressslv3_mc2) %>% count()
+```
+
+
+```{r, educational-attainment-comparisons}
+long_tot %>% group_by(educat_bl, cham) %>% count()
+
+long_tot %>% filter(complete_qx_mc2 == 1) %>% group_by(educat_bl) %>% count()
+```
+
+
+```{r, baseline-sample-characteristics}
+# Subset to baseline (1999) sample
+baseline_99 <- long_tot %>% filter(sample_1999 == 1)
+
+## Age today
+baseline_99 <- baseline_99 %>% mutate(baseline_age_today = momdl_age + 23.5)
+baseline_99 %>% filter(!is.na(baseline_age_today)) %>% summarize(mean = mean(baseline_age_today), sd = sd(baseline_age_today))
+
+## Education
+baseline_99 %>% group_by(educat_bl) %>% count()
+
+## Nativity
+baseline_99 %>% group_by(ageusa_cat) %>% count()
+
+## Race/ethnicity
+baseline_99 %>% group_by(raceeth_mom) %>% count()
+baseline_99$raceeth_mom
+
+## Language
+baseline_99 %>% group_by(lang_bl) %>% count()
+baseline_99$lang_bl
+
+## Marital status
+baseline_99 %>% group_by(marstat_bl) %>% count()
+baseline_99$marstat_bl
+
+## Worked since last visit
+baseline_99 %>% group_by(worksp_bl) %>% count()
+baseline_99$worksp_bl
+
+## Poverty
+baseline_99 %>% group_by(povcat_bl) %>% count()
+```
+
+
+```{r, refresher-sample-characteristics}
+# Subset to refresher (2009) sample
+refresh_09 <- long_tot %>% filter(sample_2009 == 1)
+
+## Age today
+refresh_09 <- refresh_09 %>% mutate(ref_age_today = ifelse(cham == 1, momdl_age + 23.5,
+                                                    ifelse(cham == 2, age_qx_9y + 13.5, NA)))
+
+refresh_09 %>% filter(!is.na(ref_age_today)) %>% summarize(mean = mean(ref_age_today), 
+                                                           sd = sd(ref_age_today))
+
+refresh_09 %>% select(ref_age_today, momdl_age, cham)
+
+
+## Education
+refresh_09 %>% group_by(educat_bl) %>% count()
+refresh_09$educat_bl
+
+## Nativity
+refresh_09 %>% group_by(ageusa_cat) %>% count()
+
+## Race/ethnicity
+refresh_09 %>% group_by(raceeth_mom) %>% count()
+refresh_09$raceeth_mom
+
+## Language
+refresh_09 %>% group_by(lang_9y) %>% count()
+refresh_09 %>% filter(is.na(lang_9y)) %>% group_by(lang_bl) %>% count()
+refresh_09$lang_9y
+
+## Marital status
+refresh_09 %>% group_by(marstat_bl) %>% count()
+refresh_09$marstat_bl
+
+## Worked since last visit
+refresh_09 %>% group_by(worksp_bl) %>% count()
+refresh_09$worksp_bl
+
+## Poverty
+refresh_09 %>% group_by(povcat_bl) %>% count()
+#refresh_09 %>% filter(is.na(povcat_bl)) %>% group_by(povcat_9y) %>% count()
+
+## Food insecurity
+refresh_09 %>% group_by(ficat_9y) %>% count()
+refresh_09$ficat_9y
+
+## People per room
+refresh_09 %>% group_by(dens1_cat_9y) %>% count()
+refresh_09$dens1_cat_9y
+
+## People per bedroom
+refresh_09 %>% group_by(ppb2_9y) %>% count()
+refresh_09$ppb2_9y
+```
+
+
+```{r, matcog-1-sample-characteristics}
+# Subset to MC1 sample
+mc1 <- long_tot %>% filter(complete_qx_mc1 == 1)
+
+## Age
+mc1 <- mc1 %>% mutate(age_today = ifelse(cham == 1, momdl_age + 26,
+                                                    ifelse(cham == 2, age_qx_9y + 16, NA)))
+
+mc1 %>% filter(!is.na(age_today)) %>% summarize(mean = mean(age_today), 
+                  sd = sd(age_today))
+
+## Education
+mc1 %>% group_by(educat_bl) %>% count()
+
+## Nativity
+mc1 %>% group_by(ageusa_cat) %>% count()
+
+## Race/ethnicity
+mc1 %>% group_by(raceeth_mom) %>% count()
+mc1$raceeth_mom
+
+## Language
+mc1 %>% group_by(lang_bl) %>% count()
+mc1$lang_bl
+
+## Marital status
+mc1 %>% group_by(marstat_bl) %>% count()
+mc1$marstat_bl
+
+## Worked since last visit
+mc1 %>% group_by(worksp_bl) %>% count()
+mc1$worksp_bl
+
+## Poverty status
+mc1 %>% group_by(povcat_bl) %>% count()
+
+## Food insecurity
+mc1 %>% group_by(ficat_9y) %>% count()
+mc1$ficat_9y
+
+## People per room
+mc1 %>% group_by(dens1_cat_9y) %>% count()
+mc1$dens1_cat_9y
+
+## People per bedroom
+mc1 %>% group_by(ppb2_9y) %>% count()
+mc1$ppb2_9y
+
+## Job stress
+mc1 %>% group_by(stress3_mc1) %>% count()
+mc1$stress3_mc1
+```
+
+```{r, did-not-participate-matcog-1}
+# 348 people who participated in 1999 baseline and 2009 refresher
+long_tot %>% filter(sample_1999 == 1 & sample_2009 == 1) # 348
+
+# 289 people who joined in the 2009 refresher
+long_tot %>% filter(sample_2009 == 1 & cham!= 1)
+
+# Did not participate in Mat Cog 1
+no_mc1_1 <- long_tot %>% filter(sample_2009 == 0) # 249
+
+no_mc1_2 <- long_tot %>% filter(sample_1999 == 1 & sample_2009 == 1 & is.na(complete_qx_mc1)) # 54
+
+no_mc1_3 <- long_tot %>% filter(sample_2009 == 1 & cham!= 1 & is.na(complete_qx_mc1)) # 51
+
+no_mc1 <- rbind(no_mc1_1, no_mc1_2, no_mc1_3) # 354
+
+
+## Age today
+no_mc1 <- no_mc1 %>% mutate(age_today = ifelse(cham == 1, momdl_age + 26,
+                                                    ifelse(cham == 2, age_qx_9y + 16, NA)))
+no_mc1 %>% filter(!is.na(age_today)) %>% summarize(mean = mean(age_today), 
+                  sd = sd(age_today))
+
+## Education
+no_mc1 %>% group_by(educcat_mom) %>% count()
+no_mc1$educcat_mom
+
+## Nativity 
+no_mc1 %>% group_by(ageusa_cat) %>% count()
+
+## Race/ethnicity
+no_mc1 %>% group_by(raceeth_mom) %>% count()
+no_mc1$raceeth_mom
+
+## Language
+no_mc1 %>% group_by(lang_bl) %>% count()
+no_mc1$lang_bl
+
+## Marital status
+no_mc1 %>% group_by(marstat_bl) %>% count()
+no_mc1$marstat_bl
+
+## Worked since last visit
+no_mc1 %>% group_by(worksp_bl) %>% count()
+no_mc1$worksp_bl
+
+## Poverty status
+no_mc1 %>% group_by(povcat_bl) %>% count()
+no_mc1$povcat_bl
+
+## Food insecurity
+no_mc1 %>% group_by(ficat_9y) %>% count()
+no_mc1$ficat_9y
+
+## People per room
+no_mc1 %>% group_by(dens1_cat_9y) %>% count()
+no_mc1$dens1_cat_9y
+
+## People per bedroom
+no_mc1 %>% group_by(ppb2_9y) %>% count()
+no_mc1$ppb2_9y
+
+## Job stress
+no_mc1 %>% group_by(stress3_mc1) %>% count()
+no_mc1$stress3_mc1
+```
+
+
+```{r, matcog-2-sample-characteristics}
+# Subset to MC2 sample
+mc2 <- long_tot %>% filter(complete_qx_mc2 == 1)
+
+## Age today
+mc2 <- mc2 %>% mutate(age_today = ifelse(cham == 1, momdl_age + 27,
+                                                    ifelse(cham == 2, age_qx_9y + 17, NA)))
+mc2 %>% filter(!is.na(age_today)) %>% summarize(mean = mean(age_today), 
+                  sd = sd(age_today))
+
+## Education
+mc2 %>% group_by(educcat_mom) %>% count()
+mc2$educcat_mom
+
+## Nativity 
+mc2 %>% group_by(ageusa_cat) %>% count()
+
+## Race/ethnicity
+mc2 %>% group_by(raceeth_mom) %>% count()
+mc2$raceeth_mom
+
+## Language
+mc2 %>% group_by(lang_bl) %>% count()
+mc2$lang_bl
+
+## Marital status
+mc2 %>% group_by(marstat_bl) %>% count()
+mc2$marstat_bl
+
+## Worked since last visit
+mc2 %>% group_by(worksp_bl) %>% count()
+mc2$worksp_bl
+
+## Poverty status
+mc2 %>% group_by(povcat_bl) %>% count()
+mc2$povcat_9y
+
+## Food insecurity
+mc2 %>% group_by(ficat_9y) %>% count()
+mc2$ficat_9y
+
+## People per room
+mc2 %>% group_by(dens1_cat_9y) %>% count()
+mc2$dens1_cat_9y
+
+## People per bedroom
+no_mc1 %>% group_by(ppb2_9y) %>% count()
+no_mc1$ppb2_9y
+
+## Job stress
+mc2 %>% group_by(stress3_mc1) %>% count()
+mc2$stress3_mc1
+```
+
+
+```{r, did-not-participate-matcog-2}
+no_mc2 <- long_tot %>% filter(complete_qx_mc1 == 1 & is.na(complete_qx_mc2))
+
+## Age today 
+no_mc2 <- no_mc2 %>% mutate(age_today = ifelse(cham == 1, momdl_age + 27,
+                                                    ifelse(cham == 2, age_qx_9y + 17, NA)))
+no_mc2 %>% filter(!is.na(age_today)) %>% summarize(mean = mean(age_today), 
+                  sd = sd(age_today))
+## Education
+no_mc2 %>% group_by(educcat_mom) %>% count()
+no_mc2$educcat_mom
+
+## Nativity 
+no_mc2 %>% group_by(ageusa_cat) %>% count()
+
+## Race/ethnicity
+no_mc2 %>% group_by(raceeth_mom) %>% count()
+no_mc2$raceeth_mom
+
+## Language
+no_mc2 %>% group_by(lang_bl) %>% count()
+no_mc2$lang_bl
+
+## Marital status
+no_mc2 %>% group_by(marstat_bl) %>% count()
+no_mc2$marstat_bl
+
+## Worked since last visit
+no_mc2 %>% group_by(worksp_bl) %>% count()
+no_mc2$worksp_bl
+
+## Poverty status
+no_mc2 %>% group_by(povcat_bl) %>% count()
+
+## Food insecurity
+no_mc2 %>% group_by(ficat_9y) %>% count()
+no_mc2$ficat_9y
+
+## People per room
+no_mc2 %>% group_by(dens1_cat_9y) %>% count()
+no_mc2$dens1_cat_9y
+
+## People per bedroom
+no_mc2 %>% group_by(ppb2_9y) %>% count()
+no_mc2$ppb2_9y
+
+## Job stress
+no_mc2 %>% group_by(stress3_mc1) %>% count()
+no_mc2$stress3_mc1
+```
