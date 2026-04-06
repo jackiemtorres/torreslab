@@ -561,6 +561,8 @@ mc2 %>% filter(shorter_adch_educ == "College Grad or Higher") %>% group_by(depre
 ```
 
 
+
+
 ##### Parental Stress #####
 ```{r, parental stress}
 # reverse scoring for qs 1, 2, 5, 6, 7, 8, 17, 18
@@ -679,7 +681,6 @@ fviz_eig(pca, addlabels = TRUE)
 # Biplot
 fviz_pca_var(pca, col.var = "black")
 
-# Contribution of each variable
 ```
 
 
@@ -689,6 +690,7 @@ fa.parallel(mc2_corr, fa = "fa")
 efa <- factanal(x = mc2_corr, factors = 4, 
                 rotation = "varimax", 
                 scores = "regression")
+
 
 # 1 factor: 22.6% of variance explained
 # 2 factors: 33.2% of variance explained
@@ -761,7 +763,7 @@ mc2_no_miss %>% filter(shorter_adch_educ == "Unknown") %>% group_by(dominant_fac
 mc2_no_miss %>% filter(is.na(shorter_adch_educ)) %>% group_by(dominant_factor) %>% count()
 ```
 
-```{r}
+```{r, plot of distribution by dominant factor}
 mc2_no_miss %>% group_by(dominant_factor) %>% count()
 
 # Plot distribution of dominant factor
@@ -790,6 +792,9 @@ loadings
 ```
 
 
+
+
+#### Functional Social Support ####
 ```{r, functional social support scale}
 mc2 %>% select(fssq1_mc2, fssq2_mc2, fssq3_mc2, fssq4_mc2,
                fssq5_mc2, fssq6_mc2, fssq7_mc2, fssq8_mc2,
@@ -815,14 +820,268 @@ mc2 %>% filter(is.na(avg_fssq))
 ```
 
 
-```{r, factor analysis of FSSQ}
-# emotional vs. instrumental types of support
+```{r, correlation between fssq variables}
+# Create correlation matrix 
+fssq_corr <- mc2 %>% select(fssq1_mc2, fssq2_mc2, fssq3_mc2, fssq4_mc2,
+               fssq5_mc2, fssq6_mc2, fssq7_mc2, fssq8_mc2, newid)
+
+fssq_corr <- fssq_corr %>% rename(people_care = fssq1_mc2,
+                                love_affection = fssq2_mc2,
+                                talk_problem_work = fssq3_mc2, 
+                                talk_problem_personal = fssq4_mc2, 
+                                talk_money = fssq5_mc2, 
+                                invites = fssq6_mc2, 
+                                useful_advice = fssq7_mc2, 
+                                help_sick = fssq8_mc2)
+
+fssq_corr_with_id <- fssq_corr %>% na.omit()
+
+fssq_corr <- fssq_corr_with_id %>% select(-newid)
+
+# correlation matrix
+cor_fssq <- cor(fssq_corr)
+# people_care correlated with love_affection, talk_money
+# love_affection correlated with people_care, talk_problem_work, talk_problem_personal, talk_money, help_sick
+# talk_problem_work correlated with love_affection, talk_problem_personal, talk_money, useful_advice, help_sick
+# talk_problem_personal correlated with love_affection, talk_problem_work, talk_money, useful_advice, help_sick
+# talk_money correlated with people_care, love_affection, talk_problem_work, talk_problem_personal, useful_advice
+# invites correlated with useful_advice
+# useful_advice correlated with talk_problem_work, talk_problem_personal, talk_money, invites
+# help_sick correlated with love_affection, talk_problem_work, talk_problem_personal
+
+cortest.bartlett(fssq_corr) # do correlations exist? 
+KMO(fssq_corr) # assess sampling adequacy 
+det(cor(fssq_corr)) # check for multicollinearity
+
+# Create correlogram
+corrplot(cor_fssq, tl.col = "black")
+```
+
+
+```{r, FSSQ factor analysis with 3 factors}
+fa.parallel(fssq_corr, fa = "fa")
+
+# start with 3 factors
+efa <- factanal(x = fssq_corr, factors = 3, 
+                rotation = "varimax", 
+                scores = "regression")
+
+
+# isolate factor scores
+factor_scores <- as.data.frame(efa$scores)
+
+
+loadings <- efa$loadings
+loadings
+
+### Eigenvalues 
+# Calculate correlation matrix
+cor_matrix <- cor(mc2_corr, use = "pairwise.complete.obs")
+
+# Compute eigenvalues
+eigen_vals <- eigen(cor_matrix)
+eigen_vals$values
 ```
 
 
 ```{r, FSSQ in association with cognitive outcomes}
-# any natural cut off? 
+# filter mc2 dataset to include 470 individuals with all FSSQ data
+mc2_limited <- mc2 %>% filter(newid %in% c(fssq_corr_with_id$newid))
 
-# FSSQ factors and cognitive performance (including age, education, marital status)
+# combine factor analysis scores with outcome and covariates in dataset
+new_mc2 <- cbind(factor_scores, mc2_limited$memory_mc1, mc2_limited$execfun_rc_mc1, mc2_limited$verbal_rc_mc1,
+                 mc2_limited$global_rc_mc1,
+                 mc2_limited$age_qx_mc2, mc2_limited$educcat_mom, mc2_limited$marcat_mc2, mc2_limited$lang_qx_mc2)
+
+new_mc2 <- new_mc2 %>% rename(memory_mc1 = `mc2_limited$memory_mc1`, 
+                              execfun_rc_mc1 = `mc2_limited$execfun_rc_mc1`, 
+                              verbal_rc_mc1 = `mc2_limited$verbal_rc_mc1`, 
+                              global_rc_mc1 = `mc2_limited$global_rc_mc1`, 
+                              age_qx_mc2 = `mc2_limited$age_qx_mc2`, 
+                              educcat_mom = `mc2_limited$educcat_mom`, 
+                              marcat_mc2 = `mc2_limited$marcat_mc2`, 
+                              lang_qx_mc2 = `mc2_limited$lang_qx_mc2`)
+
+#### Memory ####
+memory_lm <- lm(memory_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(memory_lm)
+
+# Factor 1 (talk support) significantly associated with memory
+
+
+#### Executive Function ####
+execfun_lm <- lm(execfun_rc_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(execfun_lm)
+
+# Factor 3 (instrumental support) significantly associated with executive function
+
+
+#### Verbal Fluency ####
+verbal_lm <- lm(verbal_rc_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(verbal_lm)
+
+# Fcator 3 (instrumental support) significantly associated with verbal fluency
+
+
+#### Global Function ####
+global_lm <- lm(global_rc_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(global_lm)
+
+# Factor 3 (instrumental support) significantly associated with global function
+
+
+
+
+
+
+# Check for any natural cutoffs for the factor groupings
+
+# Fcator 1
+ggplot(data = factor_scores, aes(x = Factor1)) + 
+  geom_histogram(col = "white") + 
+  theme_minimal(base_size = 10) + 
+  labs(x = "Factor 1 Scores")
+# 2-3 modes for factor 1
+
+
+# Factor 2
+ggplot(data = factor_scores, aes(x = Factor2)) + 
+  geom_histogram(col = "white") + 
+  theme_minimal(base_size = 10) + 
+  labs(x = "Factor 2 Scores")
+# 4 modes for factor 2
+
+
+# Factor 3
+ggplot(data = factor_scores, aes(x = Factor3)) + 
+  geom_histogram(col = "white") + 
+  theme_minimal(base_size = 10) + 
+  labs(x = "Factor 1 Scores")
+# 3 modes for factor 3
+
+
+#### Turn continuous factor scores into tertile and quartile groups by number of people ####
+
+# Create tertiles for factor 1
+new_mc2$F1_tertile <- cut(
+  new_mc2$Factor1,
+  breaks = quantile(new_mc2$Factor1, probs = c(0, 1/3, 2/3, 1)),
+  include.lowest = TRUE
+)
+
+# Create quartiles for factor 2
+new_mc2$F2_quartile <- cut(
+  new_mc2$Factor2,
+  breaks = quantile(new_mc2$Factor2, probs = c(0, 1/4, 2/4, 3/4, 1)),
+  include.lowest = TRUE
+)
+
+# Create tertiles for factor 3
+new_mc2$F3_tertile <- cut(
+  new_mc2$Factor3,
+  breaks = quantile(new_mc2$Factor3, probs = c(0, 1/3, 2/3, 1)),
+  include.lowest = TRUE
+)
+
+
+#### Memory with categorical factor 1 ####
+memory_lm_tert <- lm(memory_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(memory_lm_tert)
+
+# medium and high tertiles have higher memory outcome than low tertile group for factor 1
+
+
+#### Memory with categorical factor 2 ####
+memory_lm_factor2 <- lm(memory_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(memory_lm_factor2) # not significant
+
+
+#### Memory with categorical factor 3 ####
+memory_lm_factor3 <- lm(memory_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(memory_lm_factor3) # high tertile significant
+
+
+
+#### Executive Function with categorical factor 3 ####
+execfun_lm_tert <- lm(execfun_rc_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(execfun_lm_tert)
+# medium factor 3 group has higher executive function outcome than low, high factor 3 group has higher executive function outcome than low group, but not as high as medium group
+
+
+#### Executive Function with categorical factor 1 ####
+execfun_lm_factor1 <- lm(execfun_rc_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(execfun_lm_factor1) # not significant
+
+
+#### Executive Function with categorical factor 2 ####
+execfun_lm_factor2 <- lm(execfun_rc_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(execfun_lm_factor2) # not significant
+
+
+
+#### Verbal Fluency with categorical factor 3 ####
+verbal_lm_tert <- lm(verbal_rc_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(verbal_lm_tert)
+# high factor 3 group has higher verbal fluency outcome than low (only significant group)
+
+
+
+#### Verbal Fluency with categorical factor 1 ####
+verbal_lm_factor1 <- lm(verbal_rc_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(verbal_lm_factor1) # not significant
+
+
+#### Verbal Fluency with categorical factor 2 ####
+verbal_lm_factor2 <- lm(verbal_rc_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(verbal_lm_factor2) # not significant
+
+
+
+#### Global Function with categorical factor 3 ####
+global_lm_tert <- lm(global_rc_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(global_lm_tert)
+# medium and high factor 3 groups have higher global function outcomes than low factor 3 group
+
+
+#### Global function with categorical factor 1
+global_lm_factor1 <- lm(global_rc_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(global_lm_factor1) # not significant
+
+
+#### Global function with categorical factor 2
+global_lm_factor2 <- lm(global_rc_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
+                         marcat_mc2 + lang_qx_mc2, data = new_mc2)
+
+summary(global_lm_factor2) # not significant
 ```
 
