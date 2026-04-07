@@ -14,6 +14,7 @@ library(FactoMineR)
 library(ggcorrplot)
 library(factoextra)
 library(psych)
+library(broom)
 
 # Read in longitudinal data 
 matcog <- read_dta("../../Code/mat_long_adversity_nohsn.dta")
@@ -906,7 +907,7 @@ new_mc2 <- new_mc2 %>% rename(memory_mc1 = `mc2_limited$memory_mc1`,
 memory_lm <- lm(memory_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(memory_lm)
+tidy(memory_lm, conf.int = T)
 
 # Factor 1 (talk support) significantly associated with memory
 
@@ -915,7 +916,7 @@ summary(memory_lm)
 execfun_lm <- lm(execfun_rc_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(execfun_lm)
+tidy(execfun_lm, conf.int = T)
 
 # Factor 3 (instrumental support) significantly associated with executive function
 
@@ -924,16 +925,16 @@ summary(execfun_lm)
 verbal_lm <- lm(verbal_rc_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(verbal_lm)
+tidy(verbal_lm, conf.int = T)
 
-# Fcator 3 (instrumental support) significantly associated with verbal fluency
+# Factor 3 (instrumental support) significantly associated with verbal fluency
 
 
 #### Global Function ####
 global_lm <- lm(global_rc_mc1 ~ Factor1 + Factor2 + Factor3 + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(global_lm)
+tidy(global_lm, conf.int = T)
 
 # Factor 3 (instrumental support) significantly associated with global function
 
@@ -944,7 +945,7 @@ summary(global_lm)
 
 # Check for any natural cutoffs for the factor groupings
 
-# Fcator 1
+# Factor 1
 ggplot(data = factor_scores, aes(x = Factor1)) + 
   geom_histogram(col = "white") + 
   theme_minimal(base_size = 10) + 
@@ -996,7 +997,7 @@ new_mc2$F3_tertile <- cut(
 memory_lm_tert <- lm(memory_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(memory_lm_tert)
+tidy(memory_lm_tert, conf.int = T)
 
 # medium and high tertiles have higher memory outcome than low tertile group for factor 1
 
@@ -1005,14 +1006,14 @@ summary(memory_lm_tert)
 memory_lm_factor2 <- lm(memory_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(memory_lm_factor2) # not significant
+tidy(memory_lm_factor2, conf.int = T) # not significant
 
 
 #### Memory with categorical factor 3 ####
 memory_lm_factor3 <- lm(memory_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(memory_lm_factor3) # high tertile significant
+tidy(memory_lm_factor3, conf.int = T) # high tertile significant
 
 
 
@@ -1020,7 +1021,7 @@ summary(memory_lm_factor3) # high tertile significant
 execfun_lm_tert <- lm(execfun_rc_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(execfun_lm_tert)
+tidy(execfun_lm_tert, conf.int = T)
 # medium factor 3 group has higher executive function outcome than low, high factor 3 group has higher executive function outcome than low group, but not as high as medium group
 
 
@@ -1028,14 +1029,14 @@ summary(execfun_lm_tert)
 execfun_lm_factor1 <- lm(execfun_rc_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(execfun_lm_factor1) # not significant
+tidy(execfun_lm_factor1, conf.int = T) # not significant
 
 
 #### Executive Function with categorical factor 2 ####
 execfun_lm_factor2 <- lm(execfun_rc_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(execfun_lm_factor2) # not significant
+tidy(execfun_lm_factor2, conf.int = T) # not significant
 
 
 
@@ -1043,7 +1044,7 @@ summary(execfun_lm_factor2) # not significant
 verbal_lm_tert <- lm(verbal_rc_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(verbal_lm_tert)
+tidy(verbal_lm_tert, conf.int = T)
 # high factor 3 group has higher verbal fluency outcome than low (only significant group)
 
 
@@ -1052,14 +1053,14 @@ summary(verbal_lm_tert)
 verbal_lm_factor1 <- lm(verbal_rc_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(verbal_lm_factor1) # not significant
+tidy(verbal_lm_factor1, conf.int = T) # not significant
 
 
 #### Verbal Fluency with categorical factor 2 ####
 verbal_lm_factor2 <- lm(verbal_rc_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(verbal_lm_factor2) # not significant
+tidy(verbal_lm_factor2, conf.int = T) # not significant
 
 
 
@@ -1067,7 +1068,7 @@ summary(verbal_lm_factor2) # not significant
 global_lm_tert <- lm(global_rc_mc1 ~ F3_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(global_lm_tert)
+tidy(global_lm_tert, conf.int = T)
 # medium and high factor 3 groups have higher global function outcomes than low factor 3 group
 
 
@@ -1075,13 +1076,13 @@ summary(global_lm_tert)
 global_lm_factor1 <- lm(global_rc_mc1 ~ F1_tertile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(global_lm_factor1) # not significant
+tidy(global_lm_factor1, conf.int = T) # not significant
 
 
 #### Global function with categorical factor 2
 global_lm_factor2 <- lm(global_rc_mc1 ~ F2_quartile + age_qx_mc2 + educcat_mom + 
                          marcat_mc2 + lang_qx_mc2, data = new_mc2)
 
-summary(global_lm_factor2) # not significant
+tidy(global_lm_factor2, conf.int = T) # not significant
 ```
 
